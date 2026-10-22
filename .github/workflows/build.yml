@@ -38,7 +38,7 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        pyinstaller --onefile --windowed ${{ matrix.icon_flag }} --name="MouseAnalyzer" main.py
+        pyinstaller --onefile --windowed ${{ matrix.icon_flag }} --name="MouseAnalyzer" MouseTracker.py
 
     - name: Upload binaries to Release
       uses: softprops/action-gh-release@v2
