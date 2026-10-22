@@ -60,10 +60,9 @@ jobs:
           pyinstaller --noconfirm --clean --windowed
           --name MouseTracker MouseTracker.py
 
-      - name: Save Mac build
+      - name: Save Mac app
         uses: actions/upload-artifact@v4
         with:
           name: MouseTracker-macOS
-          path: dist/MouseTracker.app
+          path: dist/MouseTracker.app/
           if-no-files-found: error
-
