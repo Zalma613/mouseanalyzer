@@ -1,0 +1,24 @@
+{
+    "calib_dark_thresh": 78,
+    "calib_diff_thresh": 40,
+    "calib_ladder_thresh": 175,
+    "calib_fault_Ratio": 78,
+    "dip_cooldown_sec": 0.5,
+    "dip_min_dist_px": 25,
+    "gate_dist_cm": 60.0,
+    "frame_stride": 1,
+    "enable_zones": true,
+    "enable_kinematics": true,
+    "enable_review": true,
+    "use_gpu": true,
+    "dlc_superanimal": true,
+    "dlc_export_train": false,
+    "geometry": {
+        "rx": 22,
+        "ry": 285,
+        "rw": 1876,
+        "rh": 391,
+        "left_gate_x": 106,
+        "right_gate_x": 1814
+    }
+}
