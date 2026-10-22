@@ -14,13 +14,29 @@ from tkinter import filedialog, messagebox, ttk, scrolledtext
 import cv2
 import numpy as np
 
-# Munkakönyvtár beállítása a script (vagy a lefordított .app / .exe) mappájára
-if getattr(sys, 'frozen', False):
-    # Ha le van fordítva PyInstallerrel (.exe vagy .app)
-    os.chdir(os.path.dirname(sys.executable))
-else:
-    # Ha sima python szkriptként futtatod
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+# ==============================================================================
+# BIZTONSÁGOS KIMENETI MAPPA BEÁLLÍTÁSA (macOS .app & Windows .exe kompatibilis)
+# ==============================================================================
+def setup_safe_working_directory(folder_name="MouseAnalyzer_Eredmenyek"):
+    """
+    Beállítja a munkakönyvtárat a felhasználó Dokumentumok mappájába,
+    így macOS App Translocation / Sandbox és Windows Program Files alatt is
+    garantáltan lesz írási joga a programnak.
+    """
+    docs_dir = os.path.expanduser("~/Documents")
+    if not os.path.exists(docs_dir):
+        docs_dir = os.path.expanduser("~")
+    safe_dir = os.path.join(docs_dir, folder_name)
+    os.makedirs(safe_dir, exist_ok=True)
+    try:
+        os.chdir(safe_dir)
+    except Exception:
+        pass
+    return safe_dir
+
+
+SAFE_BASE_DIR = setup_safe_working_directory()
 
 # OpenCV többszálúság és GPU (OpenCL / Apple Metal) engedélyezése
 cv2.setUseOptimized(True)
@@ -53,19 +69,27 @@ def close_opencv_windows():
 
 
 def open_video_accelerated(video_path, use_hw=True):
-    """Hardveres (GPU VideoToolbox / D3D11 / VAAPI) videódekódolás megkísérlése."""
+    """
+    Hardveres videódekódolás megkísérlése, sikertelenség esetén
+    automatikus visszaállás szoftveres olvasásra.
+    """
+    norm_path = os.path.normpath(video_path)
     if use_hw and hasattr(cv2, "CAP_PROP_HW_ACCELERATION") and hasattr(cv2, "VIDEO_ACCELERATION_ANY"):
         try:
             cap = cv2.VideoCapture(
-                video_path,
+                norm_path,
                 cv2.CAP_ANY,
                 [cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY]
             )
             if cap.isOpened():
-                return cap
+                ret, _ = cap.read()
+                if ret:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    return cap
+                cap.release()
         except Exception:
             pass
-    return cv2.VideoCapture(video_path)
+    return cv2.VideoCapture(norm_path)
 
 
 class AsyncVideoReader:
@@ -138,7 +162,9 @@ class DLCAddonManager:
         except Exception:
             self.dlc_available = False
 
-    def export_training_dataset(self, pending_results, base_folder="DLC_Tanitokepek_Export"):
+    def export_training_dataset(self, pending_results, base_folder=None):
+        if base_folder is None:
+            base_folder = os.path.join(SAFE_BASE_DIR, "DLC_Tanitokepek_Export")
         os.makedirs(base_folder, exist_ok=True)
         crops_dir = os.path.join(base_folder, "1_Dinamikus_Eger_Kivagasok_Crop")
         full_dir = os.path.join(base_folder, "2_Teljes_Kamera_Kepkockak")
@@ -329,6 +355,8 @@ class PerVideoIDTrackerApp:
         self.root.minsize(1000, 720)
         self.root.configure(bg="#F3F4F6")
 
+        self.output_base_dir = SAFE_BASE_DIR
+
         self.video_data = []
         self.is_running = False
         self.completed_videos = 0
@@ -402,11 +430,9 @@ class PerVideoIDTrackerApp:
         header_frame.pack(fill="x")
 
         ttk.Label(header_frame, text="Egér elemző PROMAX + DeepLabCut Addon", style="Header.TLabel").pack(anchor="w")
-        gpu_status_txt = "GPU (OpenCL/Metal) Aktív" if self.gpu_available else "CPU SIMD Optimalizált"
-        dlc_status_txt = "DLC SuperAnimal Telepítve" if self.dlc_addon.dlc_available else "Morfológiai AI Kulcspont-becslő Aktív"
         ttk.Label(
             header_frame,
-            text=f"Made by Zalma",
+            text=f"Made by Zalma  |  Kimeneti mappa: {self.output_base_dir}",
             style="SubHeader.TLabel"
         ).pack(anchor="w", pady=(2, 0))
 
@@ -496,7 +522,7 @@ class PerVideoIDTrackerApp:
             variable=self.var_enable_review
         ).pack(side="left", padx=(0, 14))
 
-        self.var_use_gpu = tk.BooleanVar(value=True)
+        self.var_use_gpu = tk.BooleanVar(value=(sys.platform != "win32"))
         ttk.Checkbutton(
             opt_frame1, text="🚀 GPU (UMat + HW Dekóder) és Aszinkron Olvasó",
             variable=self.var_use_gpu
@@ -610,9 +636,9 @@ class PerVideoIDTrackerApp:
         self.log_area.pack(fill="both", expand=True)
 
         self.log(
-            f"Rendszer kész! GPU OpenCL támogatás: {'IGEN' if self.gpu_available else 'NEM'} | "
-            f"DeepLabCut csomag: {'AKTÍV' if self.dlc_addon.dlc_available else 'Tartalék Morfológiai Kulcspont-analízis'}. "
-            "Gyorsabb elemzésért állítsd a 'Képkocka-lépésköz' értéket 2-re!"
+            f"Rendszer kész! Kimeneti könyvtár: {self.output_base_dir}\n"
+            f"GPU OpenCL támogatás: {'IGEN' if self.gpu_available else 'NEM'} | "
+            f"DeepLabCut csomag: {'AKTÍV' if self.dlc_addon.dlc_available else 'Tartalék Morfológiai Kulcspont-analízis'}."
         )
 
     def _build_profile_dict(self):
@@ -689,7 +715,7 @@ class PerVideoIDTrackerApp:
             self.btn_quick_start.config(state="normal")
 
     def _try_autoload_last_profile(self):
-        default_path = "utolso_kalibracio.json"
+        default_path = os.path.join(self.output_base_dir, "utolso_kalibracio.json")
         if os.path.exists(default_path):
             try:
                 with open(default_path, "r", encoding="utf-8") as f:
@@ -709,6 +735,7 @@ class PerVideoIDTrackerApp:
     def save_calibration_json(self):
         fpath = filedialog.asksaveasfilename(
             title="Kalibrációs Profil Mentése",
+            initialdir=self.output_base_dir,
             defaultextension=".json",
             initialfile="eger_kalibracio_profil.json",
             filetypes=[("JSON Profil Fájl", "*.json"), ("Minden fájl", "*.*")]
@@ -728,6 +755,7 @@ class PerVideoIDTrackerApp:
             return
         fpath = filedialog.askopenfilename(
             title="Kalibrációs Profil Betöltése",
+            initialdir=self.output_base_dir,
             filetypes=[("JSON Profil Fájl", "*.json"), ("Minden fájl", "*.*")]
         )
         if not fpath:
@@ -775,7 +803,7 @@ class PerVideoIDTrackerApp:
     def browse_videos(self):
         files = filedialog.askopenfilenames(
             title="Videók kiválasztása",
-            filetypes=[("Videó fájlok", "*.mp4 *.mov *.avi *.mkv"), ("Minden fájl", "*.*")]
+            filetypes=[("Videó fájlok", "*.mp4 *.mov *.avi *.mkv *.MP4 *.MOV *.AVI *.MKV"), ("Minden fájl", "*.*")]
         )
         if not files:
             return
@@ -863,7 +891,8 @@ class PerVideoIDTrackerApp:
         ttk.Button(top, text="Mentés (Enter)", command=save_id, style="Success.TButton").pack(pady=6)
 
     def open_results_folder(self):
-        folder = os.path.abspath(".")
+        folder = os.path.abspath(self.output_base_dir)
+        os.makedirs(folder, exist_ok=True)
         try:
             if sys.platform == "win32":
                 os.startfile(folder)
@@ -1351,7 +1380,8 @@ class PerVideoIDTrackerApp:
             "left_gate_x": left_gate_x, "right_gate_x": right_gate_x
         }
         try:
-            with open("utolso_kalibracio.json", "w", encoding="utf-8") as f:
+            default_profile_path = os.path.join(self.output_base_dir, "utolso_kalibracio.json")
+            with open(default_profile_path, "w", encoding="utf-8") as f:
                 json.dump(self._build_profile_dict(), f, indent=4, ensure_ascii=False)
         except Exception:
             pass
@@ -1436,7 +1466,7 @@ class PerVideoIDTrackerApp:
             self.update_row_status(uid, "Háttér és létra-maszk...")
 
             safe_id = "".join(c for c in animal_id if c.isalnum() or c in ('-', '_')) or "1"
-            output_dir = f"Egyed_{safe_id}_eredmenyek"
+            output_dir = os.path.join(self.output_base_dir, f"Egyed_{safe_id}_eredmenyek")
 
             fault_y_local = int(rh * (fault_pct / 100.0))
             zone_width = (right_gate_x - left_gate_x) / 3.0
@@ -2040,6 +2070,10 @@ class PerVideoIDTrackerApp:
         bottom_bar.pack(fill="x")
 
         def confirm_and_close(event=None):
+            try:
+                rev_win.grab_release()
+            except Exception:
+                pass
             rev_win.destroy()
             self.finalize_and_export_all()
 
@@ -2080,271 +2114,280 @@ class PerVideoIDTrackerApp:
             self.reset_ui()
             return
 
-        master_csv = "Minden_Egyed_Meresi_Adatai.csv"
-        sample_roi = self.pending_results[0]["roi_data"]
-        enable_zones = sample_roi[10]
-        enable_kinematics = sample_roi[11]
+        self.log("\n💾 Mentés és hőtérképek generálása folyamatban a háttérben...")
+        threading.Thread(target=self._export_worker, daemon=True).start()
 
-        csv_headers = [
-            'Egyed_ID', 'Video_Fajl', 'Futas_Sorszam',
-            'Belepesi_Ido_mp', 'Kilepesi_Ido_mp',
-            'Teljes_Athaladasi_Ido_mp', 'Netto_Mozgasi_Ido_mp',
-            'Melynyulasok_Szama', 'Mancs_Labhiba_Db', 'Orr_Lenezes_Db', 'Hatso_Farok_Db',
-            'Melynyulasok_Idopontjai_mp',
-            'Megallasok_Szama', 'Megallasok_OsszIdeje_mp', 'Megallasok_Intervallumai_Tol_Ig'
-        ]
+    def _export_worker(self):
+        try:
+            os.makedirs(self.output_base_dir, exist_ok=True)
+            master_csv = os.path.join(self.output_base_dir, "Minden_Egyed_Meresi_Adatai.csv")
+            sample_roi = self.pending_results[0]["roi_data"]
+            enable_zones = sample_roi[10]
+            enable_kinematics = sample_roi[11]
 
-        if enable_kinematics:
-            csv_headers.extend([
-                'Skala_px_per_cm',
-                'Megtett_Ut_cm', 'Atlagsebesseg_cm_mp', 'Max_Sebesseg_cm_mp',
-                'Megtett_Ut_px', 'Atlagsebesseg_px_mp', 'Max_Sebesseg_px_mp'
-            ])
+            csv_headers = [
+                'Egyed_ID', 'Video_Fajl', 'Futas_Sorszam',
+                'Belepesi_Ido_mp', 'Kilepesi_Ido_mp',
+                'Teljes_Athaladasi_Ido_mp', 'Netto_Mozgasi_Ido_mp',
+                'Melynyulasok_Szama', 'Mancs_Labhiba_Db', 'Orr_Lenezes_Db', 'Hatso_Farok_Db',
+                'Melynyulasok_Idopontjai_mp',
+                'Megallasok_Szama', 'Megallasok_OsszIdeje_mp', 'Megallasok_Intervallumai_Tol_Ig'
+            ]
 
-        if enable_zones:
-            csv_headers.extend([
-                'Start_Zona_Ido_mp', 'Start_Lenyulas_Db', 'Start_Megallas_Db',
-                'Kozep_Zona_Ido_mp', 'Kozep_Lenyulas_Db', 'Kozep_Megallas_Db',
-                'Cel_Zona_Ido_mp', 'Cel_Lenyulas_Db', 'Cel_Megallas_Db'
-            ])
+            if enable_kinematics:
+                csv_headers.extend([
+                    'Skala_px_per_cm',
+                    'Megtett_Ut_cm', 'Atlagsebesseg_cm_mp', 'Max_Sebesseg_cm_mp',
+                    'Megtett_Ut_px', 'Atlagsebesseg_px_mp', 'Max_Sebesseg_px_mp'
+                ])
 
-        if not os.path.exists(master_csv):
-            with open(master_csv, mode='w', newline='', encoding='utf-8-sig') as f:
-                writer = csv.writer(f, delimiter=';')
-                writer.writerow(csv_headers)
+            if enable_zones:
+                csv_headers.extend([
+                    'Start_Zona_Ido_mp', 'Start_Lenyulas_Db', 'Start_Megallas_Db',
+                    'Kozep_Zona_Ido_mp', 'Kozep_Lenyulas_Db', 'Kozep_Megallas_Db',
+                    'Cel_Zona_Ido_mp', 'Cel_Lenyulas_Db', 'Cel_Megallas_Db'
+                ])
 
-        for res in self.pending_results:
-            uid = res["uid"]
-            video_name = res["video_name"]
-            animal_id = res["animal_id"]
-            safe_id = res["safe_id"]
-            output_dir = res["output_dir"]
-            first_frame = res["first_frame"]
-            faded_bg_template = res["faded_bg_template"]
-            master_white_canvas = res["master_white_canvas"]
-            roi_data = res["roi_data"]
-            runs = res["runs"]
-
-            (rx, ry, rw, rh, left_gate_x, right_gate_x, _, _,
-             _, fault_pct, z_active, kin_active, _, _, gate_dist_cm, px_per_cm, _, _) = roi_data
-
-            fault_y_local = int(rh * (fault_pct / 100.0))
-            zone_width = (right_gate_x - left_gate_x) / 3.0
-            z1_boundary = left_gate_x + zone_width
-            z2_boundary = left_gate_x + 2.0 * zone_width
-
-            os.makedirs(output_dir, exist_ok=True)
-            csv_filename = os.path.join(output_dir, f"egyed_{safe_id}_meresi_adatok.csv")
-
-            all_video_trajectories = []
-            all_video_valid_dips = []
-
-            for r in runs:
-                run_count = r["run_num"]
-                start_time = r["start_time"]
-                end_time = r["end_time"]
-                transit_time = r["transit_time"]
-                clean_canvas = r["clean_canvas"].copy()
-                freeze_events = r["freezes"]
-                trajectory = r["trajectory"]
-                zone_times = r["zone_times"]
-
-                valid_dips = [d for d in r["dips"] if d["valid"]]
-                dip_count = len(valid_dips)
-                paw_faults = sum(1 for d in valid_dips if d.get("dlc_code") == "PAW")
-                nose_peeks = sum(1 for d in valid_dips if d.get("dlc_code") == "NOSE")
-                hind_tails = sum(1 for d in valid_dips if d.get("dlc_code") == "HIND_TAIL")
-
-                all_video_trajectories.append(trajectory)
-                all_video_valid_dips.extend(valid_dips)
-
-                freeze_count = len(freeze_events)
-                freeze_sec_total = sum(ev[2] for ev in freeze_events)
-                net_moving_time = max(0.0, transit_time - freeze_sec_total)
-
-                for idx_pt, d in enumerate(valid_dips, start=1):
-                    if d["save_crop"]:
-                        snap = d["frame"].copy()
-                        cv2.line(snap, (rx, ry + fault_y_local), (rx + rw, ry + fault_y_local), (0, 0, 255), 1)
-                        cv2.circle(snap, (d["x"], d["y"]), 16, (0, 0, 255), 3)
-                        part_lbl = d.get("dlc_part", "")
-                        cv2.putText(
-                            snap,
-                            f"Egyed #{animal_id} | Futas #{run_count} | Lenyulas #{idx_pt} ({d['sec']:.2f}s) [{part_lbl}]",
-                            (25, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2
-                        )
-                        snap_path = os.path.join(
-                            output_dir, f"egyed_{safe_id}_futas_{run_count}_lenyulas_{idx_pt}.jpg"
-                        )
-                        save_image_unicode(snap_path, snap)
-
-                zone_dips = [0, 0, 0]
-                zone_freezes = [0, 0, 0]
-                if z_active:
-                    for d in valid_dips:
-                        if d["x"] < z1_boundary:
-                            zone_dips[0] += 1
-                        elif d["x"] < z2_boundary:
-                            zone_dips[1] += 1
-                        else:
-                            zone_dips[2] += 1
-
-                    for _, _, _, fx, _ in freeze_events:
-                        if fx < z1_boundary:
-                            zone_freezes[0] += 1
-                        elif fx < z2_boundary:
-                            zone_freezes[1] += 1
-                        else:
-                            zone_freezes[2] += 1
-
-                freeze_intervals_str = (
-                    " | ".join(f"{fs:.2f}s-{fe:.2f}s ({fd:.2f}s)" for fs, fe, fd, _, _ in freeze_events)
-                    if freeze_events else "Nincs"
-                )
-                dip_times_str = (
-                    ", ".join(f"{d['sec']:.2f}s[{d.get('dlc_code', 'PAW')}]" for d in valid_dips)
-                    if valid_dips else "Nincs"
-                )
-
-                run_with_faded_ladder = np.minimum(faded_bg_template, clean_canvas)
-
-                if z_active:
-                    cv2.line(run_with_faded_ladder, (int(z1_boundary), ry), (int(z1_boundary), ry + rh), (150, 150, 150), 1, cv2.LINE_AA)
-                    cv2.line(run_with_faded_ladder, (int(z2_boundary), ry), (int(z2_boundary), ry + rh), (150, 150, 150), 1, cv2.LINE_AA)
-
-                for idx_fr, (fs, fe, fd, fx, fy_top) in enumerate(freeze_events, start=1):
-                    label_y = max(ry + 25, fy_top - 15 - ((idx_fr % 2) * 20))
-                    cv2.line(run_with_faded_ladder, (fx, fy_top), (fx, label_y + 5), (0, 140, 255), 2)
-                    cv2.putText(
-                        run_with_faded_ladder,
-                        f"Megallas #{idx_fr}: {fs:.2f}-{fe:.2f}s ({fd:.2f}s)",
-                        (max(10, fx - 70), label_y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 120, 255), 2
-                    )
-
-                faded_base_for_hm = run_with_faded_ladder.copy()
-
-                for idx_pt, d in enumerate(valid_dips, start=1):
-                    dx, dy, d_sec = d["x"], d["y"], d["sec"]
-                    short_code = d.get("dlc_code", "PAW")
-                    cv2.circle(run_with_faded_ladder, (dx, dy), 12, (0, 0, 255), 2)
-                    cv2.putText(
-                        run_with_faded_ladder, f"#{idx_pt}[{short_code}] ({d_sec:.2f}s)", (dx - 30, dy + 26),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 2
-                    )
-
-                info_line1 = (
-                    f"Egyed #{animal_id} | Futas #{run_count} | "
-                    f"Teljes: {transit_time:.2f}s | Netto: {net_moving_time:.2f}s | "
-                    f"Seb: {r['avg_speed_cm_s']:.1f} cm/s"
-                )
-                info_line2 = (
-                    f"Lenyulas: {dip_count} db (Mancs:{paw_faults}, Orr:{nose_peeks}) | "
-                    f"Megallas: {freeze_count} db, ossz: {freeze_sec_total:.2f}s"
-                )
-
-                for canvas_img in (clean_canvas, run_with_faded_ladder):
-                    cv2.putText(canvas_img, info_line1, (25, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 0, 220), 2)
-                    cv2.putText(canvas_img, info_line2, (25, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.54, (180, 60, 0), 2)
-
-                img_clean_path = os.path.join(output_dir, f"egyed_{safe_id}_futas_{run_count}_tiszta_{transit_time:.2f}s.jpg")
-                img_faded_path = os.path.join(output_dir, f"egyed_{safe_id}_futas_{run_count}_halvany_{transit_time:.2f}s.jpg")
-                save_image_unicode(img_clean_path, clean_canvas)
-                save_image_unicode(img_faded_path, run_with_faded_ladder)
-
-                if kin_active:
-                    hm_title = (
-                        f"Egyed #{animal_id} | Futas #{run_count} | "
-                        f"Ut: {r['path_len_cm']:.1f}cm | Atlag: {r['avg_speed_cm_s']:.1f}cm/s"
-                    )
-                    hm_img = self._generate_heatmap_image(
-                        first_frame, [trajectory], valid_dips, hm_title,
-                        blend_alpha=0.48, draw_dip_circles_red=False
-                    )
-                    hm_path = os.path.join(output_dir, f"egyed_{safe_id}_futas_{run_count}_heatmap.jpg")
-                    save_image_unicode(hm_path, hm_img)
-
-                    faded_hm_img = self._generate_heatmap_image(
-                        faded_base_for_hm, [trajectory], valid_dips, info_line1,
-                        blend_alpha=0.42, draw_dip_circles_red=True
-                    )
-                    cv2.putText(faded_hm_img, info_line2, (25, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.54, (180, 60, 0), 2)
-                    faded_hm_path = os.path.join(
-                        output_dir, f"egyed_{safe_id}_futas_{run_count}_halvany_heatmap_{transit_time:.2f}s.jpg"
-                    )
-                    save_image_unicode(faded_hm_path, faded_hm_img)
-
-                row_data = [
-                    str(animal_id), video_name, run_count,
-                    f"{start_time:.2f}", f"{end_time:.2f}",
-                    f"{transit_time:.2f}", f"{net_moving_time:.2f}",
-                    dip_count, paw_faults, nose_peeks, hind_tails,
-                    dip_times_str,
-                    freeze_count, f"{freeze_sec_total:.2f}", freeze_intervals_str
-                ]
-
-                if kin_active:
-                    row_data.extend([
-                        f"{px_per_cm:.2f}",
-                        f"{r['path_len_cm']:.2f}",
-                        f"{r['avg_speed_cm_s']:.2f}",
-                        f"{r['max_speed_cm_s']:.2f}",
-                        f"{r['path_len_px']:.1f}",
-                        f"{r['avg_speed_px_s']:.1f}",
-                        f"{r['max_speed_px_s']:.1f}"
-                    ])
-
-                if z_active:
-                    row_data.extend([
-                        f"{zone_times[0]:.2f}", zone_dips[0], zone_freezes[0],
-                        f"{zone_times[1]:.2f}", zone_dips[1], zone_freezes[1],
-                        f"{zone_times[2]:.2f}", zone_dips[2], zone_freezes[2]
-                    ])
-
-                csv_exists = os.path.exists(csv_filename)
-                with open(csv_filename, mode='a', newline='', encoding='utf-8-sig') as f:
+            if not os.path.exists(master_csv):
+                with open(master_csv, mode='w', newline='', encoding='utf-8-sig') as f:
                     writer = csv.writer(f, delimiter=';')
-                    if not csv_exists:
-                        writer.writerow(csv_headers)
-                    writer.writerow(row_data)
+                    writer.writerow(csv_headers)
 
-                with open(master_csv, mode='a', newline='', encoding='utf-8-sig') as f2:
-                    writer2 = csv.writer(f2, delimiter=';')
-                    writer2.writerow(row_data)
+            for res in self.pending_results:
+                uid = res["uid"]
+                video_name = res["video_name"]
+                animal_id = res["animal_id"]
+                safe_id = res["safe_id"]
+                output_dir = res["output_dir"]
+                first_frame = res["first_frame"]
+                faded_bg_template = res["faded_bg_template"]
+                master_white_canvas = res["master_white_canvas"]
+                roi_data = res["roi_data"]
+                runs = res["runs"]
 
-            saved_runs_for_video = len(runs)
-            if saved_runs_for_video > 0:
-                master_faded_clean = np.minimum(faded_bg_template, master_white_canvas)
-                master_faded = master_faded_clean.copy()
-                summary_title = f"Egyed #{animal_id} Osszesitett ({saved_runs_for_video} db futas) - {video_name}"
-                cv2.putText(master_faded, summary_title, (25, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 0, 0), 2)
-                master_img_path = os.path.join(output_dir, f"egyed_{safe_id}_OSSZESITETT_{saved_runs_for_video}_futas.jpg")
-                save_image_unicode(master_img_path, master_faded)
+                (rx, ry, rw, rh, left_gate_x, right_gate_x, _, _,
+                 _, fault_pct, z_active, kin_active, _, _, gate_dist_cm, px_per_cm, _, _) = roi_data
 
-                if kin_active:
-                    master_hm_title = f"Egyed #{animal_id} OSSZESITETT Heatmap & Sebesseg ({saved_runs_for_video} futas)"
-                    master_hm = self._generate_heatmap_image(
-                        first_frame, all_video_trajectories, all_video_valid_dips, master_hm_title,
-                        blend_alpha=0.48, draw_dip_circles_red=False
+                fault_y_local = int(rh * (fault_pct / 100.0))
+                zone_width = (right_gate_x - left_gate_x) / 3.0
+                z1_boundary = left_gate_x + zone_width
+                z2_boundary = left_gate_x + 2.0 * zone_width
+
+                os.makedirs(output_dir, exist_ok=True)
+                csv_filename = os.path.join(output_dir, f"egyed_{safe_id}_meresi_adatok.csv")
+
+                all_video_trajectories = []
+                all_video_valid_dips = []
+
+                for r in runs:
+                    run_count = r["run_num"]
+                    start_time = r["start_time"]
+                    end_time = r["end_time"]
+                    transit_time = r["transit_time"]
+                    clean_canvas = r["clean_canvas"].copy()
+                    freeze_events = r["freezes"]
+                    trajectory = r["trajectory"]
+                    zone_times = r["zone_times"]
+
+                    valid_dips = [d for d in r["dips"] if d["valid"]]
+                    dip_count = len(valid_dips)
+                    paw_faults = sum(1 for d in valid_dips if d.get("dlc_code") == "PAW")
+                    nose_peeks = sum(1 for d in valid_dips if d.get("dlc_code") == "NOSE")
+                    hind_tails = sum(1 for d in valid_dips if d.get("dlc_code") == "HIND_TAIL")
+
+                    all_video_trajectories.append(trajectory)
+                    all_video_valid_dips.extend(valid_dips)
+
+                    freeze_count = len(freeze_events)
+                    freeze_sec_total = sum(ev[2] for ev in freeze_events)
+                    net_moving_time = max(0.0, transit_time - freeze_sec_total)
+
+                    for idx_pt, d in enumerate(valid_dips, start=1):
+                        if d["save_crop"]:
+                            snap = d["frame"].copy()
+                            cv2.line(snap, (rx, ry + fault_y_local), (rx + rw, ry + fault_y_local), (0, 0, 255), 1)
+                            cv2.circle(snap, (d["x"], d["y"]), 16, (0, 0, 255), 3)
+                            part_lbl = d.get("dlc_part", "")
+                            cv2.putText(
+                                snap,
+                                f"Egyed #{animal_id} | Futas #{run_count} | Lenyulas #{idx_pt} ({d['sec']:.2f}s) [{part_lbl}]",
+                                (25, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2
+                            )
+                            snap_path = os.path.join(
+                                output_dir, f"egyed_{safe_id}_futas_{run_count}_lenyulas_{idx_pt}.jpg"
+                            )
+                            save_image_unicode(snap_path, snap)
+
+                    zone_dips = [0, 0, 0]
+                    zone_freezes = [0, 0, 0]
+                    if z_active:
+                        for d in valid_dips:
+                            if d["x"] < z1_boundary:
+                                zone_dips[0] += 1
+                            elif d["x"] < z2_boundary:
+                                zone_dips[1] += 1
+                            else:
+                                zone_dips[2] += 1
+
+                        for _, _, _, fx, _ in freeze_events:
+                            if fx < z1_boundary:
+                                zone_freezes[0] += 1
+                            elif fx < z2_boundary:
+                                zone_freezes[1] += 1
+                            else:
+                                zone_freezes[2] += 1
+
+                    freeze_intervals_str = (
+                        " | ".join(f"{fs:.2f}s-{fe:.2f}s ({fd:.2f}s)" for fs, fe, fd, _, _ in freeze_events)
+                        if freeze_events else "Nincs"
                     )
-                    master_hm_path = os.path.join(output_dir, f"egyed_{safe_id}_OSSZESITETT_heatmap.jpg")
-                    save_image_unicode(master_hm_path, master_hm)
-
-                    master_faded_hm = self._generate_heatmap_image(
-                        master_faded_clean, all_video_trajectories, all_video_valid_dips, master_hm_title,
-                        blend_alpha=0.42, draw_dip_circles_red=True
+                    dip_times_str = (
+                        ", ".join(f"{d['sec']:.2f}s[{d.get('dlc_code', 'PAW')}]" for d in valid_dips)
+                        if valid_dips else "Nincs"
                     )
-                    master_faded_hm_path = os.path.join(output_dir, f"egyed_{safe_id}_OSSZESITETT_halvany_heatmap.jpg")
-                    save_image_unicode(master_faded_hm_path, master_faded_hm)
 
-            self.update_row_status(uid, f"Kész ({saved_runs_for_video} futás)")
-            self.log(f"Mentve: {video_name} -> Egyed #{animal_id} ({saved_runs_for_video} érvényes futás)")
+                    run_with_faded_ladder = np.minimum(faded_bg_template, clean_canvas)
 
-        self.log("\n==========================================")
-        self.log("MINDEN FELDOLGOZÁS ÉS MENTÉS BEFEJEZŐDÖTT!")
-        self.log(f"Közös táblázat frissítve: {os.path.abspath(master_csv)}")
-        self.log("==========================================")
-        self.reset_ui()
+                    if z_active:
+                        cv2.line(run_with_faded_ladder, (int(z1_boundary), ry), (int(z1_boundary), ry + rh), (150, 150, 150), 1, cv2.LINE_AA)
+                        cv2.line(run_with_faded_ladder, (int(z2_boundary), ry), (int(z2_boundary), ry + rh), (150, 150, 150), 1, cv2.LINE_AA)
+
+                    for idx_fr, (fs, fe, fd, fx, fy_top) in enumerate(freeze_events, start=1):
+                        label_y = max(ry + 25, fy_top - 15 - ((idx_fr % 2) * 20))
+                        cv2.line(run_with_faded_ladder, (fx, fy_top), (fx, label_y + 5), (0, 140, 255), 2)
+                        cv2.putText(
+                            run_with_faded_ladder,
+                            f"Megallas #{idx_fr}: {fs:.2f}-{fe:.2f}s ({fd:.2f}s)",
+                            (max(10, fx - 70), label_y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 120, 255), 2
+                        )
+
+                    faded_base_for_hm = run_with_faded_ladder.copy()
+
+                    for idx_pt, d in enumerate(valid_dips, start=1):
+                        dx, dy, d_sec = d["x"], d["y"], d["sec"]
+                        short_code = d.get("dlc_code", "PAW")
+                        cv2.circle(run_with_faded_ladder, (dx, dy), 12, (0, 0, 255), 2)
+                        cv2.putText(
+                            run_with_faded_ladder, f"#{idx_pt}[{short_code}] ({d_sec:.2f}s)", (dx - 30, dy + 26),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 2
+                        )
+
+                    info_line1 = (
+                        f"Egyed #{animal_id} | Futas #{run_count} | "
+                        f"Teljes: {transit_time:.2f}s | Netto: {net_moving_time:.2f}s | "
+                        f"Seb: {r['avg_speed_cm_s']:.1f} cm/s"
+                    )
+                    info_line2 = (
+                        f"Lenyulas: {dip_count} db (Mancs:{paw_faults}, Orr:{nose_peeks}) | "
+                        f"Megallas: {freeze_count} db, ossz: {freeze_sec_total:.2f}s"
+                    )
+
+                    for canvas_img in (clean_canvas, run_with_faded_ladder):
+                        cv2.putText(canvas_img, info_line1, (25, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 0, 220), 2)
+                        cv2.putText(canvas_img, info_line2, (25, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.54, (180, 60, 0), 2)
+
+                    img_clean_path = os.path.join(output_dir, f"egyed_{safe_id}_futas_{run_count}_tiszta_{transit_time:.2f}s.jpg")
+                    img_faded_path = os.path.join(output_dir, f"egyed_{safe_id}_futas_{run_count}_halvany_{transit_time:.2f}s.jpg")
+                    save_image_unicode(img_clean_path, clean_canvas)
+                    save_image_unicode(img_faded_path, run_with_faded_ladder)
+
+                    if kin_active:
+                        hm_title = (
+                            f"Egyed #{animal_id} | Futas #{run_count} | "
+                            f"Ut: {r['path_len_cm']:.1f}cm | Atlag: {r['avg_speed_cm_s']:.1f}cm/s"
+                        )
+                        hm_img = self._generate_heatmap_image(
+                            first_frame, [trajectory], valid_dips, hm_title,
+                            blend_alpha=0.48, draw_dip_circles_red=False
+                        )
+                        hm_path = os.path.join(output_dir, f"egyed_{safe_id}_futas_{run_count}_heatmap.jpg")
+                        save_image_unicode(hm_path, hm_img)
+
+                        faded_hm_img = self._generate_heatmap_image(
+                            faded_base_for_hm, [trajectory], valid_dips, info_line1,
+                            blend_alpha=0.42, draw_dip_circles_red=True
+                        )
+                        cv2.putText(faded_hm_img, info_line2, (25, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.54, (180, 60, 0), 2)
+                        faded_hm_path = os.path.join(
+                            output_dir, f"egyed_{safe_id}_futas_{run_count}_halvany_heatmap_{transit_time:.2f}s.jpg"
+                        )
+                        save_image_unicode(faded_hm_path, faded_hm_img)
+
+                    row_data = [
+                        str(animal_id), video_name, run_count,
+                        f"{start_time:.2f}", f"{end_time:.2f}",
+                        f"{transit_time:.2f}", f"{net_moving_time:.2f}",
+                        dip_count, paw_faults, nose_peeks, hind_tails,
+                        dip_times_str,
+                        freeze_count, f"{freeze_sec_total:.2f}", freeze_intervals_str
+                    ]
+
+                    if kin_active:
+                        row_data.extend([
+                            f"{px_per_cm:.2f}",
+                            f"{r['path_len_cm']:.2f}",
+                            f"{r['avg_speed_cm_s']:.2f}",
+                            f"{r['max_speed_cm_s']:.2f}",
+                            f"{r['path_len_px']:.1f}",
+                            f"{r['avg_speed_px_s']:.1f}",
+                            f"{r['max_speed_px_s']:.1f}"
+                        ])
+
+                    if z_active:
+                        row_data.extend([
+                            f"{zone_times[0]:.2f}", zone_dips[0], zone_freezes[0],
+                            f"{zone_times[1]:.2f}", zone_dips[1], zone_freezes[1],
+                            f"{zone_times[2]:.2f}", zone_dips[2], zone_freezes[2]
+                        ])
+
+                    csv_exists = os.path.exists(csv_filename)
+                    with open(csv_filename, mode='a', newline='', encoding='utf-8-sig') as f:
+                        writer = csv.writer(f, delimiter=';')
+                        if not csv_exists:
+                            writer.writerow(csv_headers)
+                        writer.writerow(row_data)
+
+                    with open(master_csv, mode='a', newline='', encoding='utf-8-sig') as f2:
+                        writer2 = csv.writer(f2, delimiter=';')
+                        writer2.writerow(row_data)
+
+                saved_runs_for_video = len(runs)
+                if saved_runs_for_video > 0:
+                    master_faded_clean = np.minimum(faded_bg_template, master_white_canvas)
+                    master_faded = master_faded_clean.copy()
+                    summary_title = f"Egyed #{animal_id} Osszesitett ({saved_runs_for_video} db futas) - {video_name}"
+                    cv2.putText(master_faded, summary_title, (25, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 0, 0), 2)
+                    master_img_path = os.path.join(output_dir, f"egyed_{safe_id}_OSSZESITETT_{saved_runs_for_video}_futas.jpg")
+                    save_image_unicode(master_img_path, master_faded)
+
+                    if kin_active:
+                        master_hm_title = f"Egyed #{animal_id} OSSZESITETT Heatmap & Sebesseg ({saved_runs_for_video} futas)"
+                        master_hm = self._generate_heatmap_image(
+                            first_frame, all_video_trajectories, all_video_valid_dips, master_hm_title,
+                            blend_alpha=0.48, draw_dip_circles_red=False
+                        )
+                        master_hm_path = os.path.join(output_dir, f"egyed_{safe_id}_OSSZESITETT_heatmap.jpg")
+                        save_image_unicode(master_hm_path, master_hm)
+
+                        master_faded_hm = self._generate_heatmap_image(
+                            master_faded_clean, all_video_trajectories, all_video_valid_dips, master_hm_title,
+                            blend_alpha=0.42, draw_dip_circles_red=True
+                        )
+                        master_faded_hm_path = os.path.join(output_dir, f"egyed_{safe_id}_OSSZESITETT_halvany_heatmap.jpg")
+                        save_image_unicode(master_faded_hm_path, master_faded_hm)
+
+                self.update_row_status(uid, f"Kész ({saved_runs_for_video} futás)")
+                self.log(f"Mentve: {video_name} -> Egyed #{animal_id} ({saved_runs_for_video} érvényes futás)")
+
+            self.log("\n==========================================")
+            self.log("MINDEN FELDOLGOZÁS ÉS MENTÉS BEFEJEZŐDÖTT!")
+            self.log(f"Közös táblázat frissítve: {os.path.abspath(master_csv)}")
+            self.log("==========================================")
+        except Exception as e:
+            self.log(f"❌ Hiba történt a mentés során: {e}")
+        finally:
+            self.root.after(0, self.reset_ui)
 
     def stop_analysis(self):
         self.is_running = False
