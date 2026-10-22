@@ -60,9 +60,17 @@ jobs:
           pyinstaller --noconfirm --clean --windowed
           --name MouseTracker MouseTracker.py
 
-      - name: Save Mac app
+      
+      - name: Zip complete macOS app
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            dist/MouseTracker.app \
+            MouseTracker-macOS.zip
+
+      - name: Upload complete macOS app
         uses: actions/upload-artifact@v4
         with:
           name: MouseTracker-macOS
-          path: dist/MouseTracker.app/
+          path: MouseTracker-macOS.zip
           if-no-files-found: error
+
