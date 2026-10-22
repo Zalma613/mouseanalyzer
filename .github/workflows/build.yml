@@ -18,9 +18,11 @@ jobs:
           - os: windows-latest
             icon_flag: --icon=icon.ico
             file_path: dist/MouseAnalyzer.exe
+            asset_name: MouseAnalyzer-Windows.exe
           - os: macos-latest
             icon_flag: --icon=icon.icns
             file_path: dist/MouseAnalyzer.app
+            asset_name: MouseAnalyzer-macOS.zip
 
     steps:
     - name: Checkout code
@@ -40,7 +42,15 @@ jobs:
       run: |
         pyinstaller --onefile --windowed ${{ matrix.icon_flag }} --name="MouseAnalyzer" MouseTracker.py
 
+    - name: Zip macOS App
+      if: matrix.os == 'macos-latest'
+      run: |
+        cd dist
+        zip -r MouseAnalyzer-macOS.zip MouseAnalyzer.app
+
     - name: Upload binaries to Release
       uses: softprops/action-gh-release@v2
       with:
-        files: ${{ matrix.file_path }}
+        files: |
+          dist/MouseAnalyzer.exe
+          dist/MouseAnalyzer-macOS.zip
