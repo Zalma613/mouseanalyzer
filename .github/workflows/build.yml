@@ -1,76 +1,44 @@
-
-name: MouseAnalyzer Build Test
+name: Build Executables
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main]
-
-permissions:
-  contents: read
+    tags:
+      - 'v*'
 
 jobs:
-  windows-build:
-    runs-on: windows-latest
+  build:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: MouseAnalyzer-Windows.exe
+          - os: macos-latest
+            artifact_name: MouseAnalyzer-macOS.app
 
     steps:
-      - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
 
-      - name: Install packages
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller opencv-python numpy
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller opencv-python numpy
 
-      - name: Build EXE
-        run: >
-          pyinstaller --noconfirm --clean --windowed
-          --name MouseTracker MouseTracker.py
+    - name: Build with PyInstaller
+      run: |
+        pyinstaller --onefile --windowed --name="MouseAnalyzer" mouse_analyzer.py
 
-      - name: Save Windows build
-        uses: actions/upload-artifact@v4
-        with:
-          name: MouseTracker-Windows
-          path: dist/MouseTracker/
-          if-no-files-found: error
-
-  macos-build:
-    runs-on: macos-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Show architecture
-        run: python -c "import platform; print(platform.machine())"
-
-      - name: Install packages
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller opencv-python numpy
-
-      - name: Build Mac app
-        run: >
-          pyinstaller --noconfirm --clean --windowed
-          --name MouseTracker MouseTracker.py
-
-      
-      - name: Zip complete macOS app
-        run: |
-          ditto -c -k --sequesterRsrc --keepParent \
-            dist/MouseTracker.app \
-            MouseTracker-macOS.zip
-
-      - name: Upload complete macOS app
-        uses: actions/upload-artifact@v4
-        with:
-          name: MouseTracker-macOS
-          path: MouseTracker-macOS.zip
-          if-no-files-found: error
-
+    - name: Upload binaries to Release
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: |
+          dist/MouseAnalyzer.exe
+          dist/MouseAnalyzer.app
