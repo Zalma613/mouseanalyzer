@@ -1,0 +1,69 @@
+
+name: MouseAnalyzer Build Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller opencv-python numpy
+
+      - name: Build EXE
+        run: >
+          pyinstaller --noconfirm --clean --windowed
+          --name MouseTracker MouseTracker.py
+
+      - name: Save Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: MouseTracker-Windows
+          path: dist/MouseTracker/
+          if-no-files-found: error
+
+  macos-build:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Show architecture
+        run: python -c "import platform; print(platform.machine())"
+
+      - name: Install packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller opencv-python numpy
+
+      - name: Build Mac app
+        run: >
+          pyinstaller --noconfirm --clean --windowed
+          --name MouseTracker MouseTracker.py
+
+      - name: Save Mac build
+        uses: actions/upload-artifact@v4
+        with:
+          name: MouseTracker-macOS
+          path: dist/MouseTracker.app
+          if-no-files-found: error
+
