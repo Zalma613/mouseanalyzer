@@ -14,6 +14,14 @@ from tkinter import filedialog, messagebox, ttk, scrolledtext
 import cv2
 import numpy as np
 
+# Munkakönyvtár beállítása a script (vagy a lefordított .app / .exe) mappájára
+if getattr(sys, 'frozen', False):
+    # Ha le van fordítva PyInstallerrel (.exe vagy .app)
+    os.chdir(os.path.dirname(sys.executable))
+else:
+    # Ha sima python szkriptként futtatod
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
 # OpenCV többszálúság és GPU (OpenCL / Apple Metal) engedélyezése
 cv2.setUseOptimized(True)
 try:
