@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build for ${{ matrix.os }}
@@ -14,10 +17,10 @@ jobs:
         include:
           - os: windows-latest
             icon_flag: --icon=icon.ico
-            asset_name: MouseAnalyzer-Windows.exe
+            file_path: dist/MouseAnalyzer.exe
           - os: macos-latest
             icon_flag: --icon=icon.icns
-            asset_name: MouseAnalyzer-macOS.app
+            file_path: dist/MouseAnalyzer.app
 
     steps:
     - name: Checkout code
@@ -35,12 +38,9 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        pyinstaller --onefile --windowed ${{ matrix.icon_flag }} --name="MouseAnalyzer" MouseTracker.py
+        pyinstaller --onefile --windowed ${{ matrix.icon_flag }} --name="MouseAnalyzer" main.py
 
     - name: Upload binaries to Release
       uses: softprops/action-gh-release@v2
-      if: startsWith(github.ref, 'refs/tags/')
       with:
-        files: |
-          dist/MouseAnalyzer.exe
-          dist/MouseAnalyzer.app
+        files: ${{ matrix.file_path }}
