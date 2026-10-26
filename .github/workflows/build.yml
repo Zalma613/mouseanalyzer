@@ -1,56 +1,132 @@
-name: Build and Release
+name: Build MouseAnalyzer PRO (.exe & .dmg)
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build for ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: windows-latest
-            icon_flag: --icon=icon.ico
-            file_path: dist/MouseAnalyzer.exe
-            asset_name: MouseAnalyzer-Windows.exe
-          - os: macos-latest
-            icon_flag: --icon=icon.icns
-            file_path: dist/MouseAnalyzer.app
-            asset_name: MouseAnalyzer-macOS.zip
-
+  # ============================================================================
+  # 1. WINDOWS (.EXE) BUILD
+  # ============================================================================
+  build-windows:
+    runs-on: windows-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller opencv-python numpy pandas
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install opencv-python numpy pyinstaller
 
-    - name: Build with PyInstaller
-      run: |
-        pyinstaller --onefile --windowed ${{ matrix.icon_flag }} --name="MouseAnalyzer" MouseTracker.py
+      - name: Verify Icons Exist
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "icon.ico")) {
+            Write-Error "HIÁNYZIK az icon.ico a repo gyökeréből!"
+            exit 1
+          }
 
-    - name: Zip macOS App
-      if: matrix.os == 'macos-latest'
-      run: |
-        cd dist
-        zip -r MouseAnalyzer-macOS.zip MouseAnalyzer.app
+      - name: Build Windows Executable with PyInstaller
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --windowed --onefile `
+            --name "MouseAnalyzer_PRO" `
+            --icon "icon.ico" `
+            --add-data "icon.ico;." `
+            MouseTracker.py
 
-    - name: Upload binaries to Release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: |
-          dist/MouseAnalyzer.exe
-          dist/MouseAnalyzer-macOS.zip
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MouseAnalyzer-PRO-Windows-x64
+          path: dist/MouseAnalyzer_PRO.exe
+
+  # ============================================================================
+  # 2. MACOS (.APP & .DMG) BUILD (Apple Silicon / Universal kompatibilis)
+  # ============================================================================
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies & PyObjC (for native macOS Dock/Menu branding)
+        run: |
+          python -m pip install --upgrade pip
+          pip install opencv-python numpy pyinstaller pyobjc-core pyobjc-framework-Cocoa
+
+      - name: Verify macOS Icons Exist
+        run: |
+          if [ ! -f "icon.icns" ]; then
+            echo "HIÁNYZIK az icon.icns a repo gyökeréből!"
+            exit 1
+          fi
+
+      - name: Build macOS .app Bundle with PyInstaller
+        run: |
+          pyinstaller --noconfirm --clean --windowed \
+            --name "MouseAnalyzer PRO" \
+            --icon "icon.icns" \
+            --osx-bundle-identifier "com.zalma.mouseanalyzer.pro" \
+            --add-data "icon.icns:." \
+            --add-data "icon.ico:." \
+            MouseTracker.py
+
+      - name: Ad-Hoc Code Sign .app (Prevents macOS Gatekeeper 'Damaged App' error)
+        run: |
+          codesign --force --deep --sign - "dist/MouseAnalyzer PRO.app"
+
+      - name: Package .app into Installer .dmg
+        run: |
+          mkdir -p dmg_staging
+          cp -r "dist/MouseAnalyzer PRO.app" dmg_staging/
+          ln -s /Applications dmg_staging/Applications
+          hdiutil create -volname "MouseAnalyzer PRO" \
+            -srcfolder dmg_staging \
+            -ov -format UDZO \
+            "dist/MouseAnalyzer_PRO_macOS.dmg"
+
+      - name: Upload macOS .dmg Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MouseAnalyzer-PRO-macOS-DMG
+          path: dist/MouseAnalyzer_PRO_macOS.dmg
+
+  # ============================================================================
+  # 3. AUTOMATIKUS GITHUB RELEASE LÉTREHOZÁSA (ha v* tag-et pusholtál)
+  # ============================================================================
+  create-release:
+    needs: [build-windows, build-macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_assets
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release_assets/MouseAnalyzer-PRO-Windows-x64/MouseAnalyzer_PRO.exe
+            release_assets/MouseAnalyzer-PRO-macOS-DMG/MouseAnalyzer_PRO_macOS.dmg
+          generate_release_notes: true
