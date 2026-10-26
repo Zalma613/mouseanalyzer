@@ -86,7 +86,7 @@ def apply_window_icon(root):
                 if img is not None:
                     ok, buf = cv2.imencode(".png", img)
                     if ok:
-                         root._app_icon_ref = tk.PhotoImage(data=buf.tobytes())
+                        root._app_icon_ref = tk.PhotoImage(data=buf.tobytes())
                         root.iconphoto(True, root._app_icon_ref)
             except Exception:
                 pass
