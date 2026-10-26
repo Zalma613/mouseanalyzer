@@ -86,6 +86,8 @@ jobs:
             --osx-bundle-identifier "com.zalma.mouseanalyzer.pro" \
             --add-data "icon.icns:." \
             --add-data "icon.ico:." \
+            --collect-all cv2 \
+            --hidden-import numpy \
             MouseTracker.py
 
       - name: Ad-Hoc Code Sign .app
