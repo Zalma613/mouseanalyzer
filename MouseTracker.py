@@ -16,8 +16,7 @@ import cv2
 import numpy as np
 
 
-APP_NAME = "MouseAnalyzer PRO"
-APP_VERSION = "2.0"
+APP_NAME = "MouseAnalyzer"
 APP_ID = "zalma.mouseanalyzer.pro.2.0"
 
 
@@ -136,8 +135,8 @@ except Exception:
 # ==============================================================================
 TRANSLATIONS = {
     "hu": {
-        "subtitle": "  PRO  //  Horizontális Létra & AI Kulcspont Elemző",
-        "out_dir_prefix": "Zalma Edition  •  Kimeneti mappa:",
+        "subtitle": "Horizontális Létra & AI Kulcspont Elemző",
+        "out_dir_prefix": "Made by: Zalma  •  Kimeneti mappa:",
         "btn_change_dir": "📁 Kimeneti Mappa",
         "btn_open_dir": "📂 Eredmények",
         "kpi_videos": "BETÖLTÖTT VIDEÓK",
@@ -189,8 +188,8 @@ TRANSLATIONS = {
         "btn_save_enter": "Mentés (Enter)",
     },
     "en": {
-        "subtitle": "  PRO  //  Horizontal Ladder & AI Pose Estimation Suite",
-        "out_dir_prefix": "Zalma Edition  •  Output directory:",
+        "subtitle": "Horizontal Ladder & AI Pose Estimation Suite",
+        "out_dir_prefix": "Made by Zalma  •  Output directory:",
         "btn_change_dir": "📁 Output Folder",
         "btn_open_dir": "📂 Open Results",
         "kpi_videos": "LOADED VIDEOS",
