@@ -18,6 +18,7 @@ import numpy as np
 
 APP_NAME = "MouseAnalyzer"
 APP_ID = "zalma.mouseanalyzer.pro.2.0"
+APP_VERSION = "2.0"
 
 
 # ==============================================================================
