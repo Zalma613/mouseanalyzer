@@ -2,6 +2,7 @@ cat > .gitignore <<'EOF'
 __pycache__/
 *.py[cod]
 .venv/
+.gitignore/
 venv/
 build/
 dist/
