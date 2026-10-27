@@ -16,9 +16,9 @@ import cv2
 import numpy as np
 
 
-APP_NAME = "MouseAnalyzer"
-APP_ID = "zalma.mouseanalyzer.pro.2.0"
-APP_VERSION = "2.0"
+APP_NAME = "MouseAnalyzer PRO"
+APP_ID = "zalma.mouseanalyzer.pro.3.5"
+APP_VERSION = "3.5"
 
 
 # ==============================================================================
@@ -37,10 +37,7 @@ def get_resource_path(relative_path):
 
 
 def configure_native_os_identity():
-    """
-    Replaces default 'Python' process branding with 'MouseAnalyzer PRO'
-    on Windows Taskbar and macOS Menu Bar / Dock.
-    """
+    """Replaces default 'Python' process branding with 'MouseAnalyzer PRO'."""
     if sys.platform == "win32":
         try:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
@@ -79,7 +76,6 @@ def apply_window_icon(root):
                     ns_app.setApplicationIconImage_(ns_img)
             except Exception:
                 pass
-        # Fallback for Tkinter window icon via OpenCV decoding of icon.ico
         if os.path.exists(ico_path):
             try:
                 img = cv2.imread(ico_path, cv2.IMREAD_UNCHANGED)
@@ -107,7 +103,7 @@ configure_native_os_identity()
 
 
 # ==============================================================================
-# SAFE WORKING DIRECTORY SETUP (macOS .app & Windows .exe compatible)
+# SAFE WORKING DIRECTORY SETUP & OPENCL GPU INITIALIZATION
 # ==============================================================================
 def setup_safe_working_directory(folder_name="MouseAnalyzer_Eredmenyek"):
     docs_dir = os.path.expanduser("~/Documents")
@@ -132,116 +128,359 @@ except Exception:
 
 
 # ==============================================================================
-# BILINGUAL TRANSLATION DICTIONARY (HU / EN)
+# BILINGUAL TRANSLATION & TOOLTIP DICTIONARY (HU / EN)
 # ==============================================================================
 TRANSLATIONS = {
     "hu": {
-        "subtitle": "Horizontális Létra & AI Kulcspont Elemző",
-        "out_dir_prefix": "Made by: Zalma  •  Kimeneti mappa:",
-        "btn_change_dir": "📁 Kimeneti Mappa",
+        "subtitle": "Párhuzamos YOLO + OpenCV Horizontális Létra Elemző",
+        "out_dir_prefix": "Kimenet:",
+        "btn_change_dir": "📁 Mappa",
         "btn_open_dir": "📂 Eredmények",
+        "btn_settings": "⚙ Speciális Beállítások",
         "kpi_videos": "BETÖLTÖTT VIDEÓK",
-        "kpi_calib": "KALIBRÁCIÓS PROFIL",
-        "kpi_engine": "DETEKTÁLÓ MOTOR",
-        "kpi_dlc": "AI KULCSPONT MODUL",
+        "kpi_calib": "KALIBRÁCIÓ",
+        "kpi_engine": "HIBRID MOTOR",
+        "kpi_dlc": "ANATÓMIAI MODUL",
         "kpi_vid_val": "{n} db videó",
-        "kpi_cal_none": "Nincs kalibrálva",
+        "kpi_cal_none": "Automatikus (Zero-Calib)",
         "kpi_cal_active": "Aktív ({w}x{h} px)",
-        "sec1_title": "1. Kiválasztott Videók és Egyed Azonosítók (Dupla kattintás = ID szerkesztés)",
-        "btn_add_vid": "＋ Videók Hozzáadása...",
-        "btn_edit_id": "✎ Kijelölt ID Szerkesztése",
-        "btn_remove_vid": "✕ Kijelölt Eltávolítása",
+        "sec1_title": "1. Videók és Egyedek",
+        "btn_add_vid": "＋ Videók Hozzáadása",
+        "btn_edit_id": "✎ ID Szerkesztése",
+        "btn_remove_vid": "✕ Eltávolítás",
         "btn_clear_vid": "Lista Ürítése",
         "col_fname": "Videó Fájlnév",
-        "col_id": "Egyed Azonosító (ID)",
-        "col_status": "Feldolgozási Állapot",
+        "col_id": "Egyed ID",
+        "col_status": "Állapot",
         "col_path": "Elérési Útvonal",
         "status_waiting": "Várakozik",
-        "sec2_title": "2. Elemzési Paraméterek, Kálmán-Szűrő, DeepLabCut AI & Hardveres Gyorsítás",
+        "sec2_title": "2. Futtatás és Vezérlés",
+        "chk_rev": "🔍 Lenyúlás-ellenőrző ablak",
+        "chk_auto_calib": "🤖 Automatikus létra- és egér-kalibráció",
+        "chk_yolo_fusion": "⚡ Párhuzamos YOLO + OpenCV Maszk Fúzió",
         "chk_zones": "Pálya szektorokra bontása (Start / Közép / Cél)",
         "chk_kin": "Kinematika (cm/s) + Sebesség-Heatmapek",
-        "chk_rev": "Interaktív lenyúlás-felülvizsgáló ablak",
-        "chk_gpu": "🚀 GPU (UMat + HW Dekóder) & Aszinkron Olvasó",
-        "chk_kalman": "🎯 Kálmán-szűrős trajektória-simítás + Adaptív AI Maszk",
-        "chk_dlc_sa": "🧠 AI Kulcspont-analízis (SuperAnimal: Orr vs. Mancs vs. Farok)",
-        "chk_dlc_exp": "📸 Active Learning DLC Tanítóképek kigyűjtése",
+        "chk_gpu": "🚀 GPU (OpenCL UMat + HW Dekóder) & Aszinkron Olvasó",
+        "chk_kalman": "🎯 Kálmán-szűrő + Elasztikus Létrakövetés",
+        "chk_dlc_sa": "🧠 Anatómiai osztályozás (Mellső/Hátsó láb vs. Orr)",
+        "chk_dlc_exp": "📸 DLC / YOLO tanítóképek kigyűjtése",
         "lbl_threads": "Szálak:",
         "lbl_stride": "Lépésköz:",
         "lbl_cooldown": "Refrakter (mp):",
         "lbl_mindist": "Min. táv (px):",
-        "lbl_gatecm": "Kapuk (cm):",
+        "lbl_gatecm": "Kaputáv (cm):",
         "lbl_dec": "CSV Tizedes:",
         "btn_load_prof": "📂 Profil Betöltése",
         "btn_save_prof": "💾 Profil Mentése",
-        "btn_start": "▶  Új Kalibrálás és Elemzés Indítása",
-        "btn_quick": "⚡ Gyors Indítás (Mentett Kalibrációval)",
+        "btn_start": "▶  Kalibrálás és Elemzés Indítása",
+        "btn_quick": "⚡ Gyors Indítás (Előnézet Nélkül)",
         "btn_stop": "■  Leállítás",
-        "prog_idle": "Készültség: {done} / {total} videó (Várakozás indításra)",
-        "prog_run": "Készültség: {done} / {total} videó ({pct:.0f}%)",
-        "sec3_title": "3. Részletes Futási és Állapot (State Machine) Napló",
+        "prog_idle": "Készültség: {done} / {total} videó",
+        "prog_run": "Feldolgozás: {done} / {total} videó ({pct:.0f}%)",
+        "sec3_title": "3. Eseménynapló",
         "msg_no_vid_title": "Hiányzó videók",
-        "msg_no_vid_body": "Kérlek, előbb adj hozzá legalább egy videót a listához!",
-        "msg_no_geom_title": "Nincs mentett geometria",
-        "msg_no_geom_body": "Előbb tölts be egy JSON profilt vagy végezz egy kalibrációt!",
+        "msg_no_vid_body": "Előbb adj hozzá legalább egy videót a listához!",
         "msg_select_row": "Előbb jelölj ki egy sort a táblázatban!",
-        "edit_id_title": "Egyed Azonosító (ID) Módosítása",
-        "edit_id_prompt": "Add meg az Egyed új azonosítóját:",
+        "edit_id_title": "Egyed ID Módosítása",
+        "edit_id_prompt": "Add meg az új azonosítót:",
         "btn_save_enter": "Mentés (Enter)",
+        "settings_title": "Speciális Elemzési és Hardver Beállítások",
+        "btn_close_settings": "✔ Beállítások Mentése és Bezárás",
+        # Clean, concise Tooltips
+        "tt_add_vid": "Videófájlok (.mp4, .avi, .mov, .mkv) hozzáadása a listához.",
+        "tt_edit_id": "A kijelölt videó Egyed ID-jának módosítása (dupla kattintással is működik).",
+        "tt_remove_vid": "A kijelölt videó eltávolítása a listából.",
+        "tt_clear_vid": "A teljes videólista ürítése.",
+        "tt_auto_calib": "Automatikusan megkeresi a létrát, a kapukat és az egeret tartalmazó képkockát.",
+        "tt_yolo": "Párhuzamosan futtatja a YOLO detektort és az OpenCV maszkot, így kizárja a létrafokok téves bezöldülését.",
+        "tt_rev": "A futás végén nagyítható ellenőrző ablakot nyit meg a lenyúlások átnézéséhez.",
+        "tt_gatecm": "A Start és Cél kapu közötti valós távolság centiméterben.",
+        "tt_settings": "További beállítások: szálak száma, lépésköz, refrakter idő, GPU és CSV formátum.",
+        "tt_start": "Megnyitja a nagyítható kalibrációs előnézetet, majd elindítja az elemzést.",
+        "tt_quick": "Előnézeti ablak nélkül, azonnal elindítja a kötegelt elemzést.",
+        "tt_stop": "Azonnal leállítja a futó elemzést.",
+        "tt_change_dir": "Kimeneti mappa módosítása.",
+        "tt_open_dir": "Az eredményeket tartalmazó mappa megnyitása.",
     },
     "en": {
-        "subtitle": "Horizontal Ladder & AI Pose Estimation Suite",
-        "out_dir_prefix": "Made by Zalma  •  Output directory:",
-        "btn_change_dir": "📁 Output Folder",
-        "btn_open_dir": "📂 Open Results",
+        "subtitle": "Parallel YOLO + OpenCV Horizontal Ladder Suite",
+        "out_dir_prefix": "Output:",
+        "btn_change_dir": "📁 Folder",
+        "btn_open_dir": "📂 Results",
+        "btn_settings": "⚙ Advanced Settings",
         "kpi_videos": "LOADED VIDEOS",
-        "kpi_calib": "CALIBRATION PROFILE",
-        "kpi_engine": "TRACKING ENGINE",
-        "kpi_dlc": "AI KEYPOINT MODULE",
+        "kpi_calib": "CALIBRATION",
+        "kpi_engine": "HYBRID ENGINE",
+        "kpi_dlc": "ANATOMY MODULE",
         "kpi_vid_val": "{n} videos",
-        "kpi_cal_none": "Not calibrated",
+        "kpi_cal_none": "Automatic (Zero-Calib)",
         "kpi_cal_active": "Active ({w}x{h} px)",
-        "sec1_title": "1. Selected Videos & Subject IDs (Double-click row = Edit ID)",
-        "btn_add_vid": "＋ Add Videos...",
-        "btn_edit_id": "✎ Edit Selected ID",
-        "btn_remove_vid": "✕ Remove Selected",
+        "sec1_title": "1. Videos & Subject IDs",
+        "btn_add_vid": "＋ Add Videos",
+        "btn_edit_id": "✎ Edit ID",
+        "btn_remove_vid": "✕ Remove",
         "btn_clear_vid": "Clear List",
         "col_fname": "Video Filename",
         "col_id": "Subject ID",
-        "col_status": "Processing Status",
+        "col_status": "Status",
         "col_path": "File Path",
         "status_waiting": "Queued",
-        "sec2_title": "2. Analysis Parameters, Kalman Filter, DeepLabCut AI & Hardware Acceleration",
+        "sec2_title": "2. Execution & Controls",
+        "chk_rev": "🔍 Interactive Dip Inspector",
+        "chk_auto_calib": "🤖 Auto-detect ladder & mouse",
+        "chk_yolo_fusion": "⚡ Parallel YOLO + OpenCV Mask Fusion",
         "chk_zones": "Split track into sectors (Start / Mid / Goal)",
         "chk_kin": "Kinematics (cm/s) + Velocity Heatmaps",
-        "chk_rev": "Interactive dip review & inspector window",
-        "chk_gpu": "🚀 GPU (UMat + HW Decoder) & Async Prefetch",
-        "chk_kalman": "🎯 Kalman Filter trajectory smoothing + Adaptive AI Mask",
-        "chk_dlc_sa": "🧠 AI Keypoint Classification (SuperAnimal: Nose vs. Paw vs. Tail)",
+        "chk_gpu": "🚀 GPU (OpenCL UMat + HW Decoder) & Async Reader",
+        "chk_kalman": "🎯 Kalman Filter + Elastic Ladder Bending Tracker",
+        "chk_dlc_sa": "🧠 Anatomical classification (Fore/Hind Paw vs. Nose)",
         "chk_dlc_exp": "📸 Export Active Learning DLC Training Crops",
         "lbl_threads": "Threads:",
-        "lbl_stride": "Frame Stride:",
+        "lbl_stride": "Stride:",
         "lbl_cooldown": "Refractory (s):",
         "lbl_mindist": "Min. dist (px):",
-        "lbl_gatecm": "Gates (cm):",
+        "lbl_gatecm": "Gate span (cm):",
         "lbl_dec": "CSV Decimal:",
         "btn_load_prof": "📂 Load Profile",
         "btn_save_prof": "💾 Save Profile",
-        "btn_start": "▶  Start New Calibration & Analysis",
-        "btn_quick": "⚡ Quick Start (Use Saved Calibration)",
+        "btn_start": "▶  Start Calibration & Analysis",
+        "btn_quick": "⚡ Quick Start (Skip Preview)",
         "btn_stop": "■  Stop",
-        "prog_idle": "Progress: {done} / {total} videos (Ready)",
-        "prog_run": "Progress: {done} / {total} videos ({pct:.0f}%)",
-        "sec3_title": "3. Real-Time Execution & State Machine Log",
+        "prog_idle": "Progress: {done} / {total} videos",
+        "prog_run": "Processing: {done} / {total} videos ({pct:.0f}%)",
+        "sec3_title": "3. Event Log",
         "msg_no_vid_title": "Missing Videos",
         "msg_no_vid_body": "Please add at least one video to the queue first!",
-        "msg_no_geom_title": "No Saved Geometry",
-        "msg_no_geom_body": "Please load a JSON profile or run calibration first!",
         "msg_select_row": "Please select a video row in the table first!",
         "edit_id_title": "Edit Subject ID",
         "edit_id_prompt": "Enter new Subject ID:",
         "btn_save_enter": "Save (Enter)",
+        "settings_title": "Advanced Analysis & Hardware Settings",
+        "btn_close_settings": "✔ Save & Close Settings",
+        # Tooltips
+        "tt_add_vid": "Add video files (.mp4, .avi, .mov, .mkv) to the batch queue.",
+        "tt_edit_id": "Edit Subject ID for the selected row (or double-click row).",
+        "tt_remove_vid": "Remove the selected video from the list.",
+        "tt_clear_vid": "Clear all videos from the list.",
+        "tt_auto_calib": "Automatically detects ladder ROI, gates, and best mouse preview frame.",
+        "tt_yolo": "Runs YOLO detection in parallel with OpenCV to spatially gate the mouse and prevent false rung masks.",
+        "tt_rev": "Opens a zoomable inspector window after analysis to review detected foot faults.",
+        "tt_gatecm": "Physical distance in centimeters between Start and Goal gates.",
+        "tt_settings": "Configure threads, frame stride, refractory period, GPU, and CSV format.",
+        "tt_start": "Opens the zoomable calibration preview, then starts batch analysis.",
+        "tt_quick": "Skips preview windows and starts batch analysis immediately.",
+        "tt_stop": "Gracefully stops all active worker threads.",
+        "tt_change_dir": "Change output directory.",
+        "tt_open_dir": "Open output results folder.",
     }
 }
+
+
+# ==============================================================================
+# FLICKER-FREE SINGLETON ON-HOVER TOOLTIP MANAGER
+# ==============================================================================
+class ToolTip:
+    """
+    Flicker-free, screen-clamped singleton tooltip that never steals mouse focus
+    or gets stuck on screen.
+    """
+    _active_tip = None
+
+    def __init__(self, widget, text_func):
+        self.widget = widget
+        self.text_func = text_func
+        self.tip_win = None
+        self.after_id = None
+        self.last_mouse = (0, 0)
+
+        self.widget.bind("<Enter>", self._on_enter, add="+")
+        self.widget.bind("<Motion>", self._on_motion, add="+")
+        self.widget.bind("<Leave>", self._on_leave, add="+")
+        self.widget.bind("<ButtonPress>", self._on_leave, add="+")
+        self.widget.bind("<Destroy>", self._on_leave, add="+")
+
+    def _on_enter(self, event=None):
+        if event is not None:
+            self.last_mouse = (event.x_root, event.y_root)
+        self._cancel()
+        self.after_id = self.widget.after(450, self._show)
+
+    def _on_motion(self, event=None):
+        if event is not None:
+            self.last_mouse = (event.x_root, event.y_root)
+
+    def _on_leave(self, event=None):
+        # Verify cursor actually left the widget (prevents false Leave events)
+        if event is not None and self.tip_win is not None:
+            try:
+                under = self.widget.winfo_containing(event.x_root, event.y_root)
+                if under == self.widget:
+                    return
+            except Exception:
+                pass
+        self._hide()
+
+    def _cancel(self):
+        if self.after_id is not None:
+            try:
+                self.widget.after_cancel(self.after_id)
+            except Exception:
+                pass
+            self.after_id = None
+
+    def _show(self):
+        self._cancel()
+        if not self.widget.winfo_exists():
+            return
+
+        # Confirm mouse is still over this widget before popping up
+        try:
+            px, py = self.widget.winfo_pointerxy()
+            under = self.widget.winfo_containing(px, py)
+            if under != self.widget:
+                return
+        except Exception:
+            px, py = self.last_mouse
+
+        text = self.text_func() if callable(self.text_func) else str(self.text_func)
+        if not text:
+            return
+
+        if ToolTip._active_tip is not None and ToolTip._active_tip is not self:
+            ToolTip._active_tip._hide()
+        ToolTip._active_tip = self
+
+        if self.tip_win is not None:
+            return
+
+        self.tip_win = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        try:
+            tw.attributes("-topmost", True)
+            if sys.platform == "darwin":
+                tw.wm_attributes("-transparent", False)
+        except Exception:
+            pass
+
+        outer = tk.Frame(tw, bg="#30363D", padx=1, pady=1)
+        outer.pack()
+        lbl = tk.Label(
+            outer, text=text, justify="left", bg="#161B22", fg="#F0F6FC",
+            font=("Segoe UI" if sys.platform == "win32" else "SF Pro Display", 9),
+            padx=10, pady=6, wraplength=320
+        )
+        lbl.pack()
+
+        tw.update_idletasks()
+        tw_w = tw.winfo_reqwidth()
+        tw_h = tw.winfo_reqheight()
+        scr_w = tw.winfo_screenwidth()
+        scr_h = tw.winfo_screenheight()
+
+        # Position offset below cursor so cursor never touches the tooltip window
+        x = min(max(8, px + 14), max(8, scr_w - tw_w - 12))
+        y = py + 22
+        if y + tw_h > scr_h - 16:
+            y = max(8, py - tw_h - 10)
+
+        tw.wm_geometry(f"+{int(x)}+{int(y)}")
+
+    def _hide(self):
+        self._cancel()
+        if self.tip_win is not None:
+            try:
+                self.tip_win.destroy()
+            except Exception:
+                pass
+            self.tip_win = None
+        if ToolTip._active_tip is self:
+            ToolTip._active_tip = None
+
+
+# ==============================================================================
+# OPENCV ZOOM & PAN VIEWPORT HELPER (EVENT-DRIVEN, 0% IDLE CPU)
+# ==============================================================================
+class OpenCVZoomPanViewport:
+    def __init__(self, img_w, img_h):
+        self.img_w = max(1, int(img_w))
+        self.img_h = max(1, int(img_h))
+        self.zoom = 1.0
+        self.cx = self.img_w / 2.0
+        self.cy = self.img_h / 2.0
+        self.panning = False
+        self.pan_start_screen = (0, 0)
+        self.pan_start_center = (self.cx, self.cy)
+        self.dirty = True
+
+    def reset(self):
+        self.zoom = 1.0
+        self.cx = self.img_w / 2.0
+        self.cy = self.img_h / 2.0
+        self.dirty = True
+
+    def get_view_rect(self):
+        vw = max(40.0, self.img_w / self.zoom)
+        vh = max(30.0, self.img_h / self.zoom)
+        x1 = float(np.clip(self.cx - vw / 2.0, 0.0, max(0.0, self.img_w - vw)))
+        y1 = float(np.clip(self.cy - vh / 2.0, 0.0, max(0.0, self.img_h - vh)))
+        self.cx = x1 + vw / 2.0
+        self.cy = y1 + vh / 2.0
+        return int(round(x1)), int(round(y1)), int(round(vw)), int(round(vh))
+
+    def screen_to_image(self, sx, sy):
+        vx, vy, vw, vh = self.get_view_rect()
+        ix = int(round(vx + (sx / float(self.img_w)) * vw))
+        iy = int(round(vy + (sy / float(self.img_h)) * vh))
+        return int(np.clip(ix, 0, self.img_w - 1)), int(np.clip(iy, 0, self.img_h - 1))
+
+    def handle_mouse(self, event, x, y, flags):
+        if event == cv2.EVENT_MOUSEWHEEL:
+            ix, iy = self.screen_to_image(x, y)
+            if flags > 0:
+                new_zoom = min(8.0, self.zoom * 1.25)
+            else:
+                new_zoom = max(1.0, self.zoom / 1.25)
+            if abs(new_zoom - self.zoom) > 1e-4:
+                ratio = self.zoom / new_zoom
+                self.cx = ix + (self.cx - ix) * ratio
+                self.cy = iy + (self.cy - iy) * ratio
+                self.zoom = new_zoom
+                self.dirty = True
+            return True
+
+        elif event in (cv2.EVENT_RBUTTONDOWN, cv2.EVENT_MBUTTONDOWN):
+            self.panning = True
+            self.pan_start_screen = (x, y)
+            self.pan_start_center = (self.cx, self.cy)
+            return True
+
+        elif event == cv2.EVENT_MOUSEMOVE and self.panning:
+            _, _, vw, vh = self.get_view_rect()
+            dx = (x - self.pan_start_screen[0]) * (vw / float(self.img_w))
+            dy = (y - self.pan_start_screen[1]) * (vh / float(self.img_h))
+            self.cx = self.pan_start_center[0] - dx
+            self.cy = self.pan_start_center[1] - dy
+            self.dirty = True
+            return True
+
+        elif event in (cv2.EVENT_RBUTTONUP, cv2.EVENT_MBUTTONUP):
+            self.panning = False
+            return True
+
+        return False
+
+    def render(self, full_img):
+        if self.zoom <= 1.01:
+            out = full_img.copy()
+        else:
+            vx, vy, vw, vh = self.get_view_rect()
+            crop = full_img[vy:vy + vh, vx:vx + vw]
+            out = cv2.resize(crop, (self.img_w, self.img_h), interpolation=cv2.INTER_LINEAR)
+
+        badge = f"Zoom: {self.zoom:.1f}x (Gorgo=Zoom, JobbGomb=Mozgatas, R=Alaphelyzet)"
+        cv2.rectangle(out, (12, self.img_h - 38), (515, self.img_h - 10), (20, 25, 32), -1)
+        cv2.putText(out, badge, (20, self.img_h - 19), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (16, 185, 129), 1, cv2.LINE_AA)
+        return out
 
 
 # ==============================================================================
@@ -249,9 +488,7 @@ TRANSLATIONS = {
 # ==============================================================================
 def save_image_unicode(path, img):
     try:
-        ext = os.path.splitext(path)[1]
-        if not ext:
-            ext = ".jpg"
+        ext = os.path.splitext(path)[1] or ".jpg"
         is_success, im_buf_arr = cv2.imencode(ext, img)
         if is_success:
             im_buf_arr.tofile(path)
@@ -308,10 +545,7 @@ def open_video_accelerated(video_path, use_hw=True):
 
 
 class MouseKalmanTracker:
-    """
-    2D Constant-Velocity Kalman Filter for smoothing rodent center-of-mass
-    trajectories and predicting position across brief rung occlusions.
-    """
+    """2D Constant-Velocity Kalman Filter for smoothing rodent center-of-mass trajectories."""
     def __init__(self):
         self.kf = cv2.KalmanFilter(4, 2)
         self.kf.measurementMatrix = np.array([[1, 0, 0, 0],
@@ -409,7 +643,452 @@ class AsyncVideoReader:
 
 
 # ==============================================================================
-# DEEPLABCUT / YOLO / MORPHOLOGICAL POSE CLASSIFIER
+# PARALLEL YOLO + OPENCV HYBRID SPATIAL LOCATOR ENGINE
+# ==============================================================================
+class ParallelYoloOpenCVEngine:
+    """
+    Runs Ultralytics YOLO (if installed) in parallel / thread-safe mode alongside
+    a fast 1D/2D OpenCV Torso-Core Density Locator.
+    Provides an exact spatial attention window [x_min, x_max, y_min, y_max] and optional
+    segmentation mask around the animal so distant ladder rungs can NEVER turn green!
+    """
+    def __init__(self, log_callback=print):
+        self.log = log_callback
+        self.yolo_model = None
+        self.yolo_lock = threading.Lock()
+        self.device = "cpu"
+        self._init_yolo()
+
+    def _init_yolo(self):
+        try:
+            if importlib.util.find_spec("ultralytics") is None:
+                return
+            from ultralytics import YOLO
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    self.device = "cuda:0"
+                elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                    self.device = "mps"
+            except Exception:
+                self.device = "cpu"
+
+            for candidate in ("mouse_yolo.pt", "ladder_yolo.pt", "yolov8n-seg.pt", "yolov8n.pt"):
+                p = get_resource_path(candidate)
+                if os.path.exists(p):
+                    self.yolo_model = YOLO(p)
+                    self.log(f"⚡ [Hybrid YOLO+OpenCV] Loaded '{candidate}' on {self.device.upper()}")
+                    return
+        except Exception:
+            self.yolo_model = None
+
+    def locate_animal_roi_and_mask(self, crop_bgr, gray_smooth, base_smooth, inv_ladder_mask, fault_y_local, dark_t, diff_t):
+        """
+        Finds the exact horizontal & vertical location of the rodent torso first,
+        then builds a spatial gating mask so ONLY pixels belonging to the animal's
+        location can be included in the final OpenCV mask.
+        """
+        rh, rw = gray_smooth.shape[:2]
+
+        # 1. Fast OpenCV Torso-Core Locator (looks strictly above the ladder rungs)
+        torso_bottom = max(15, int(fault_y_local) - 14)
+        torso_gray = gray_smooth[:torso_bottom, :]
+        torso_base = base_smooth[:torso_bottom, :]
+        torso_diff = cv2.subtract(torso_base, torso_gray)
+
+        # True rodent fur in the upper corridor is both darker than background AND low-luminance
+        core_mask = ((torso_diff >= max(16, diff_t)) & (torso_gray <= dark_t)).astype(np.uint8) * 255
+        # Also include jet-black fur (< 55) that is at least 10 levels darker than background
+        jet_black = ((torso_gray < 55) & (torso_diff >= 10)).astype(np.uint8) * 255
+        core_mask = cv2.bitwise_or(core_mask, jet_black)
+        core_mask = cv2.morphologyEx(core_mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+
+        # 2. Optional Parallel YOLO Box / Segmentation Refinement
+        yolo_bbox = None
+        yolo_seg_mask = None
+        if self.yolo_model is not None:
+            try:
+                with self.yolo_lock:
+                    results = self.yolo_model.predict(
+                        crop_bgr, conf=0.22, verbose=False, device=self.device, imgsz=320
+                    )
+                if results and len(results) > 0:
+                    r0 = results[0]
+                    if r0.boxes is not None and len(r0.boxes) > 0:
+                        boxes = r0.boxes.xyxy.cpu().numpy()
+                        areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+                        best_i = int(np.argmax(areas))
+                        x1, y1, x2, y2 = [int(v) for v in boxes[best_i]]
+                        if (x2 - x1) < rw * 0.85:
+                            yolo_bbox = (x1, y1, x2 - x1, y2 - y1)
+                        if r0.masks is not None and len(r0.masks.data) > best_i:
+                            m_raw = r0.masks.data[best_i].cpu().numpy()
+                            yolo_seg_mask = (cv2.resize(m_raw, (rw, rh)) > 0.35).astype(np.uint8) * 255
+            except Exception:
+                pass
+
+        # 3. Find dominant torso cluster from core_mask
+        contours, _ = cv2.findContours(core_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        best_c = None
+        max_a = 0
+        for c in contours:
+            a = cv2.contourArea(c)
+            if a > 220 and a > max_a:
+                max_a = a
+                best_c = c
+
+        if best_c is None and yolo_bbox is None:
+            return None, None
+
+        if best_c is not None:
+            cx, cy, cw, ch = cv2.boundingRect(best_c)
+            if yolo_bbox is not None:
+                yx, yy, yw, yh = yolo_bbox
+                cx = min(cx, yx)
+                cy = min(cy, yy)
+                cw = max(cx + cw, yx + yw) - cx
+                ch = max(cy + ch, yy + yh) - cy
+        else:
+            cx, cy, cw, ch = yolo_bbox
+
+        # Build spatial gate:
+        # - Above the rungs (torso & tail): allow tail extension behind body (+140px left/right) and +18px front
+        # - At & below the rungs (paw dip zone): STRICTLY restrict X to the torso core [cx - 8 .. cx + cw + 8]!
+        #   This guarantees that rungs outside the torso's footprint can NEVER turn green!
+        spatial_gate = np.zeros((rh, rw), dtype=np.uint8)
+
+        upper_x1 = max(0, cx - 150)
+        upper_x2 = min(rw, cx + cw + 25)
+        spatial_gate[:torso_bottom, upper_x1:upper_x2] = 255
+
+        # Paw zone X-window: only directly underneath the mouse's torso (exclude tail and far ahead of nose!)
+        paw_x1 = max(0, cx + int(cw * 0.04) - 6)
+        paw_x2 = min(rw, cx + cw - 4)
+        if paw_x2 > paw_x1:
+            spatial_gate[torso_bottom:, paw_x1:paw_x2] = 255
+
+        if yolo_seg_mask is not None:
+            yolo_dilated = cv2.dilate(yolo_seg_mask, np.ones((15, 15), np.uint8), iterations=1)
+            spatial_gate = cv2.bitwise_or(spatial_gate, yolo_dilated)
+
+        return (cx, cy, cw, ch), spatial_gate
+
+
+# ==============================================================================
+# ZERO-CALIBRATION & LIGHTWEIGHT ELASTIC LADDER TRACKING ENGINE
+# ==============================================================================
+class AutoAdaptiveLadderEngine:
+    def __init__(self, log_callback=print):
+        self.log = log_callback
+
+    @staticmethod
+    def _ensure_gray_2d(img):
+        if img is None:
+            return None
+        if img.ndim == 3:
+            if img.shape[2] == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            elif img.shape[2] == 4:
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+            else:
+                img = img[:, :, 0]
+        return np.squeeze(img).astype(np.uint8)
+
+    def auto_calibrate_from_video(self, cap, num_bg_samples=28):
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        sample_count = min(num_bg_samples, max(6, total_frames - 1)) if total_frames > 6 else 10
+
+        frames_gray = []
+        sample_indices = []
+        if total_frames > 6:
+            indices = np.linspace(0, max(1, total_frames - 2), sample_count, dtype=int)
+            for idx in indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
+                ret, frm = cap.read()
+                if ret and frm is not None:
+                    frames_gray.append(self._ensure_gray_2d(frm))
+                    sample_indices.append(int(idx))
+        else:
+            for idx in range(sample_count):
+                ret, frm = cap.read()
+                if ret and frm is not None:
+                    frames_gray.append(self._ensure_gray_2d(frm))
+                    sample_indices.append(idx)
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        if not frames_gray:
+            raise RuntimeError("Could not read frames for automatic calibration.")
+
+        stack_full = np.stack(frames_gray, axis=0)
+        clean_bg_full = np.percentile(stack_full, 95, axis=0).astype(np.uint8)
+        clean_bg_full = self._ensure_gray_2d(clean_bg_full)
+        fh, fw = clean_bg_full.shape[:2]
+
+        k_rung = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+        blackhat = cv2.morphologyEx(clean_bg_full, cv2.MORPH_BLACKHAT, k_rung)
+        sobel_x = cv2.Sobel(clean_bg_full, cv2.CV_32F, 1, 0, ksize=3)
+        sobel_x = cv2.convertScaleAbs(sobel_x)
+        combined_energy = self._ensure_gray_2d(cv2.addWeighted(blackhat, 0.65, sobel_x, 0.35, 0))
+
+        x_start, x_end = max(0, int(fw * 0.1)), min(fw, int(fw * 0.9))
+        row_energy = np.mean(combined_energy[:, x_start:x_end], axis=1)
+        row_energy[:int(fh * 0.12)] = 0
+        row_energy[int(fh * 0.88):] = 0
+
+        smooth_window = max(5, int(fh * 0.04) | 1)
+        row_energy_smooth = np.convolve(row_energy, np.ones(smooth_window) / smooth_window, mode="same")
+        ladder_y_center = int(np.argmax(row_energy_smooth))
+
+        pad_above = max(80, int(fh * 0.17))
+        pad_below = max(45, int(fh * 0.09))
+        ry = max(0, ladder_y_center - pad_above)
+        rh = min(fh - ry, pad_above + pad_below)
+
+        strip_y1 = max(0, ladder_y_center - 15)
+        strip_y2 = min(fh, ladder_y_center + 15)
+        rung_strip = combined_energy[strip_y1:strip_y2, :]
+        col_energy = np.mean(rung_strip, axis=0)
+        col_thresh = np.percentile(col_energy, 30)
+        active_cols = np.where(col_energy > col_thresh)[0]
+
+        if len(active_cols) > 20:
+            rx = max(0, int(np.percentile(active_cols, 2)) - 20)
+            rx_end = min(fw, int(np.percentile(active_cols, 98)) + 20)
+            rw = max(120, rx_end - rx)
+        else:
+            rx, rw = int(fw * 0.04), int(fw * 0.92)
+
+        left_gate_x = int(rx + rw * 0.10)
+        right_gate_x = int(rx + rw * 0.86)
+
+        roi_bg = clean_bg_full[ry:ry + rh, rx:rx + rw]
+        rung_y_local = max(14, min(rh - 14, ladder_y_center - ry))
+        auto_params = self.compute_auto_thresholds(
+            frames_gray, sample_indices, roi_bg, rx, ry, rw, rh, rung_y_local
+        )
+        rung_pts_local = self.extract_rung_keypoints(roi_bg, rung_y_local, auto_params["ladder_thresh"])
+
+        self.log(
+            f"🤖 [Auto-Calib] ROI=({rx},{ry},{rw}x{rh}) | Gates=({left_gate_x}->{right_gate_x}) | "
+            f"BestFrame=#{auto_params['best_preview_frame']} | "
+            f"Brightness={auto_params['dark_thresh']}, Diff={auto_params['diff_thresh']}, "
+            f"RungMask={auto_params['ladder_thresh']}, FaultLine={auto_params['fault_ratio']}%"
+        )
+
+        return {
+            "rx": rx, "ry": ry, "rw": rw, "rh": rh,
+            "left_gate_x": left_gate_x, "right_gate_x": right_gate_x,
+            "calib_dark_thresh": auto_params["dark_thresh"],
+            "calib_diff_thresh": auto_params["diff_thresh"],
+            "calib_ladder_thresh": auto_params["ladder_thresh"],
+            "calib_fault_Ratio": auto_params["fault_ratio"],
+            "best_preview_frame": auto_params["best_preview_frame"],
+            "rung_pts_local": rung_pts_local,
+            "base_rung_y_local": rung_y_local
+        }
+
+    def compute_auto_thresholds(self, frames_gray, sample_indices, roi_bg, rx, ry, rw, rh, rung_y_local):
+        roi_bg = self._ensure_gray_2d(roi_bg)
+
+        band_y1 = max(0, rung_y_local - 14)
+        band_y2 = min(rh, rung_y_local + 22)
+        rung_band = roi_bg[band_y1:band_y2, :]
+        p25_rung = float(np.percentile(rung_band, 25))
+        ladder_thresh = int(np.clip(p25_rung + 18, 95, 155))
+
+        best_frame_idx = sample_indices[len(sample_indices) // 2] if sample_indices else 0
+        best_mouse_score = -1.0
+        best_mouse_gray_p82 = None
+
+        body_y1 = max(0, rung_y_local - int(rh * 0.58))
+        body_y2 = max(body_y1 + 15, rung_y_local - 6)
+        mid_x1 = int(rw * 0.18)
+        mid_x2 = int(rw * 0.80)
+
+        for fg, f_idx in zip(frames_gray, sample_indices):
+            fg_2d = self._ensure_gray_2d(fg)
+            crop_f = fg_2d[ry:ry + rh, rx:rx + rw]
+            if crop_f.shape != roi_bg.shape:
+                continue
+
+            sub_bg = roi_bg[body_y1:body_y2, mid_x1:mid_x2]
+            sub_f = crop_f[body_y1:body_y2, mid_x1:mid_x2]
+            diff_body = cv2.subtract(sub_bg, sub_f)
+            strong_pixels = (diff_body > 22) & (sub_f < 115)
+            count_strong = int(np.count_nonzero(strong_pixels))
+
+            if 450 < count_strong < (sub_f.size * 0.55):
+                score = float(count_strong) * float(np.mean(diff_body[strong_pixels]) + 15.0)
+                if score > best_mouse_score:
+                    best_mouse_score = score
+                    best_frame_idx = int(f_idx)
+                    mouse_intensities = sub_f[strong_pixels]
+                    best_mouse_gray_p82 = float(np.percentile(mouse_intensities, 82))
+
+        bg_median = float(np.median(roi_bg[body_y1:body_y2, :]))
+        if best_mouse_gray_p82 is not None:
+            dark_thresh = int(np.clip(max(best_mouse_gray_p82 + 16, bg_median - 26), 115, 158))
+        else:
+            dark_thresh = int(np.clip(bg_median - 26, 120, 155))
+
+        diff_thresh = 24
+
+        fault_y_local = min(rh - 6, rung_y_local + 15)
+        fault_ratio = int(np.clip((fault_y_local / float(max(1, rh))) * 100.0, 62, 90))
+
+        return {
+            "dark_thresh": dark_thresh,
+            "diff_thresh": diff_thresh,
+            "ladder_thresh": ladder_thresh,
+            "fault_ratio": fault_ratio,
+            "best_preview_frame": best_frame_idx
+        }
+
+    def extract_rung_keypoints(self, roi_bg, rung_y_local, ladder_thresh):
+        roi_bg = self._ensure_gray_2d(roi_bg)
+        rh, rw = roi_bg.shape[:2]
+        rung_y_local = int(np.clip(rung_y_local, 10, max(11, rh - 10)))
+
+        y1 = max(0, rung_y_local - 16)
+        y2 = min(rh, rung_y_local + 18)
+        strip = roi_bg[y1:y2, :]
+
+        _, m_dark = cv2.threshold(strip, ladder_thresh, 255, cv2.THRESH_BINARY_INV)
+        edges = cv2.Canny(strip, 45, 130)
+        combined = cv2.bitwise_or(m_dark, edges)
+
+        contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        pts = []
+        for c in contours:
+            if 5 <= cv2.contourArea(c) <= 900:
+                M = cv2.moments(c)
+                if M["m00"] > 0:
+                    cx = float(M["m10"] / M["m00"])
+                    cy = float(M["m01"] / M["m00"]) + y1
+                    pts.append([cx, cy])
+
+        if len(pts) < 6:
+            xs = np.linspace(20, max(25, rw - 20), 18)
+            pts = [[float(x), float(rung_y_local)] for x in xs]
+
+        return np.asarray(pts, dtype=np.float32).reshape(-1, 1, 2)
+
+
+class ElasticLadderTracker:
+    def __init__(self, base_gray, base_inv_ladder_mask, init_rung_pts, base_fault_y_local):
+        if base_gray.ndim == 3:
+            base_gray = cv2.cvtColor(base_gray, cv2.COLOR_BGR2GRAY)
+        self.base_gray = np.squeeze(base_gray).astype(np.uint8).copy()
+        self.base_inv_ladder = np.squeeze(base_inv_ladder_mask).astype(np.uint8).copy()
+        self.base_float = np.float32(self.base_gray)
+        self.rh, self.rw = self.base_gray.shape[:2]
+        self.hann = cv2.createHanningWindow((self.rw, self.rh), cv2.CV_32F)
+
+        pts_arr = np.asarray(init_rung_pts, dtype=np.float32).reshape(-1, 1, 2)
+        self.init_pts = pts_arr.copy()
+        self.curr_pts = pts_arr.copy()
+        self.prev_gray = self.base_gray.copy()
+
+        pts_2d = pts_arr.reshape(-1, 2)
+        mean_rung_y = float(np.median(pts_2d[:, 1])) if len(pts_2d) > 0 else (base_fault_y_local - 12)
+        self.fault_offset_px = max(8.0, float(base_fault_y_local - mean_rung_y))
+        self.base_fault_y_local = float(base_fault_y_local)
+
+        self.poly_coeffs = np.array([0.0, 0.0, self.base_fault_y_local], dtype=np.float64)
+        self.global_dx = 0.0
+        self.global_dy = 0.0
+        self.step_counter = 0
+
+        self.cached_warped_bg = self.base_gray
+        self.cached_warped_inv_ladder = self.base_inv_ladder
+        self.cached_fault_curve = np.full(self.rw, int(base_fault_y_local), dtype=np.int32)
+
+        self.lk_params = dict(
+            winSize=(13, 13),
+            maxLevel=1,
+            criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 8, 0.04)
+        )
+
+    def update(self, crop_gray, mouse_bbox_local=None):
+        self.step_counter += 1
+        if self.step_counter % 4 != 1:
+            return self.cached_warped_bg, self.cached_warped_inv_ladder, self.cached_fault_curve
+
+        if crop_gray.ndim == 3:
+            crop_gray = cv2.cvtColor(crop_gray, cv2.COLOR_BGR2GRAY)
+        crop_gray = np.squeeze(crop_gray).astype(np.uint8)
+
+        curr_float = np.float32(crop_gray)
+        (shift_x, shift_y), response = cv2.phaseCorrelate(self.base_float, curr_float, self.hann)
+        if response > 0.15 and abs(shift_x) < 25 and abs(shift_y) < 25:
+            self.global_dx = 0.85 * self.global_dx + 0.15 * shift_x
+            self.global_dy = 0.85 * self.global_dy + 0.15 * shift_y
+
+        if len(self.curr_pts) >= 4:
+            next_pts, status, _ = cv2.calcOpticalFlowPyrLK(
+                self.prev_gray, crop_gray, self.curr_pts, None, **self.lk_params
+            )
+            if next_pts is not None and status is not None:
+                next_2d = next_pts.reshape(-1, 2)
+                init_2d = self.init_pts.reshape(-1, 2)
+                good_mask = status.reshape(-1) == 1
+
+                valid_x = []
+                valid_y = []
+
+                mx1, my1, mx2, my2 = -1, -1, -1, -1
+                if mouse_bbox_local is not None:
+                    bx, by, bw, bh = mouse_bbox_local
+                    mx1, my1, mx2, my2 = bx - 14, by - 14, bx + bw + 14, by + bh + 14
+
+                for i in range(len(next_2d)):
+                    px, py = float(next_2d[i, 0]), float(next_2d[i, 1])
+                    ix, iy = float(init_2d[i, 0]), float(init_2d[i, 1])
+
+                    if mx1 <= px <= mx2 and my1 <= py <= my2:
+                        next_2d[i, 0] = 0.9 * px + 0.1 * (ix + self.global_dx)
+                        next_2d[i, 1] = 0.9 * py + 0.1 * (iy + self.global_dy)
+                        continue
+
+                    if good_mask[i] and abs(px - (ix + self.global_dx)) < 12.0 and abs(py - (iy + self.global_dy)) < 16.0:
+                        valid_x.append(px)
+                        valid_y.append(py + self.fault_offset_px)
+                    else:
+                        next_2d[i, 0] = ix + self.global_dx
+                        next_2d[i, 1] = iy + self.global_dy
+
+                self.curr_pts = next_2d.reshape(-1, 1, 2).astype(np.float32)
+
+                if len(valid_x) >= 5:
+                    try:
+                        coeffs = np.polyfit(valid_x, valid_y, deg=2)
+                        coeffs[0] = np.clip(coeffs[0], -8e-5, 8e-5)
+                        self.poly_coeffs = 0.78 * self.poly_coeffs + 0.22 * coeffs
+                    except Exception:
+                        pass
+                else:
+                    self.poly_coeffs = np.array([0.0, 0.0, self.base_fault_y_local + self.global_dy])
+
+        self.prev_gray = crop_gray
+
+        if abs(self.global_dx) < 0.4 and abs(self.global_dy) < 0.4:
+            self.cached_warped_bg = self.base_gray
+            self.cached_warped_inv_ladder = self.base_inv_ladder
+        else:
+            M = np.float32([[1, 0, self.global_dx], [0, 1, self.global_dy]])
+            self.cached_warped_bg = cv2.warpAffine(self.base_gray, M, (self.rw, self.rh), borderMode=cv2.BORDER_REPLICATE)
+            self.cached_warped_inv_ladder = cv2.warpAffine(self.base_inv_ladder, M, (self.rw, self.rh), borderMode=cv2.BORDER_CONSTANT, borderValue=255)
+
+        xs = np.arange(self.rw, dtype=np.float64)
+        a, b, c = self.poly_coeffs
+        ys = a * (xs ** 2) + b * xs + c
+        self.cached_fault_curve = np.clip(ys, 10, self.rh - 2).astype(np.int32)
+
+        return self.cached_warped_bg, self.cached_warped_inv_ladder, self.cached_fault_curve
+
+
+# ==============================================================================
+# DEEPLABCUT / YOLO / BBOX-NORMALIZED POSE CLASSIFIER
 # ==============================================================================
 class DLCAddonManager:
     def __init__(self, log_callback):
@@ -446,7 +1125,6 @@ class DLCAddonManager:
 
             for r in res["runs"]:
                 run_num = r["run_num"]
-
                 for d_idx, d in enumerate(r["dips"], start=1):
                     frame = decode_frame_compressed(d["frame_buf"])
                     if frame is None:
@@ -454,28 +1132,21 @@ class DLCAddonManager:
                     fh, fw = frame.shape[:2]
                     dx, dy = int(d["x"]), int(d["y"])
 
-                    cx1 = max(0, dx - 180)
-                    cy1 = max(0, dy - 160)
-                    cx2 = min(fw, dx + 180)
-                    cy2 = min(fh, dy + 100)
+                    cx1, cy1 = max(0, dx - 180), max(0, dy - 160)
+                    cx2, cy2 = min(fw, dx + 180), min(fh, dy + 100)
                     crop_img = frame[cy1:cy2, cx1:cx2]
 
                     base_fname = f"egyed_{animal_id}_{video_name}_run{run_num}_dip{d_idx}_{d['sec']:.2f}s.jpg"
-                    crop_path = os.path.join(crops_dir, base_fname)
-                    full_path = os.path.join(full_dir, base_fname)
-
-                    save_image_unicode(crop_path, crop_img)
-                    save_image_unicode(full_path, frame)
+                    save_image_unicode(os.path.join(crops_dir, base_fname), crop_img)
+                    save_image_unicode(os.path.join(full_dir, base_fname), frame)
 
                     manifest.append({
                         "file": base_fname,
-                        "type": "dip_event",
                         "animal_id": animal_id,
                         "run": run_num,
                         "sec": round(d["sec"], 3),
                         "global_dip_xy": [dx, dy],
                         "crop_bbox_xyxy": [cx1, cy1, cx2, cy2],
-                        "local_dip_xy_in_crop": [dx - cx1, dy - cy1],
                         "dlc_part": d.get("dlc_part", "UNCLASSIFIED"),
                         "dlc_code": d.get("dlc_code", "UNKNOWN")
                     })
@@ -488,10 +1159,7 @@ class DLCAddonManager:
         except Exception:
             pass
 
-        self.log(
-            f"[DLC/YOLO Active Learning] {exported_count} db tanítókép (Crop + Teljes + JSON) "
-            f"kimentve: {os.path.abspath(base_folder)}"
-        )
+        self.log(f"[Active Learning] {exported_count} db tanítókép kimentve: {os.path.abspath(base_folder)}")
         return exported_count
 
     def _parse_superanimal_keypoints_if_any(self, temp_dir, crop_records, tw, th):
@@ -538,22 +1206,21 @@ class DLCAddonManager:
                     if any(k in best_part for k in ("nose", "snout", "head", "chin", "ear", "eye")):
                         d["dlc_part"] = f"ORR / FEJ ({best_part})"
                         d["dlc_code"] = "NOSE"
-                    elif any(k in best_part for k in ("paw", "knee", "ankle", "wrist", "elbow", "hoof", "foot", "limb")):
+                    elif any(k in best_part for k in ("paw", "knee", "ankle", "wrist", "elbow", "foot", "limb")):
                         d["dlc_part"] = f"MANCS / LÁB ({best_part})"
                         d["dlc_code"] = "PAW"
                     elif any(k in best_part for k in ("tail", "hip", "back", "pelvis")):
-                        d["dlc_part"] = f"HÁTSÓ / FAROK ({best_part})"
+                        d["dlc_part"] = f"FAROK ({best_part})"
                         d["dlc_code"] = "HIND_TAIL"
                     else:
-                        d["dlc_part"] = f"TESTRÉSZ ({best_part})"
+                        d["dlc_part"] = f"LÁB ({best_part})"
                         d["dlc_code"] = "PAW"
             return True
         except Exception:
             return False
 
     def classify_dips_with_superanimal(self, pending_results):
-        self.log("🧠 [AI Kulcspont-analízis] Lenyúlások anatómiai osztályozása (Orr vs. Mancs vs. Farok)...")
-
+        self.log("🧠 [Anatómiai Osztályozás] Lenyúlások elemzése (Mellső/Hátsó Láb vs. Orr vs. Farok)...")
         parsed_from_dlc = False
 
         if self.dlc_available:
@@ -589,13 +1256,11 @@ class DLCAddonManager:
                         scale_list=[200, 300]
                     )
                     parsed_from_dlc = self._parse_superanimal_keypoints_if_any(temp_dir, crop_records, tw, th)
-                    self.log("   ✔ SuperAnimal-Quadruped neurális háló sikeresen lefutott a kivágásokon!")
-            except Exception as e:
-                self.log(f"   ℹ SuperAnimal közvetlen futtatás átugorva ({e}), irányvektoros morfológiai elemző használata...")
+            except Exception:
+                pass
             finally:
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
-        # Enhanced Morphological + Velocity-Vector Fallback Classifier
         for res in pending_results:
             for r in res["runs"]:
                 traj = r["trajectory"]
@@ -604,22 +1269,43 @@ class DLCAddonManager:
                         continue
 
                     dx, dy, d_sec = d["x"], d["y"], d["sec"]
-                    closest_pt = min(traj, key=lambda pt: abs(pt[2] - d_sec)) if traj else (dx, dy, d_sec)
-                    cx_body, cy_body, _ = closest_pt
 
-                    rel_x = dx - cx_body
-                    aspect_ratio = d.get("dip_aspect", 1.0)
+                    move_dir = 1.0
+                    if len(traj) >= 2:
+                        near_pts = [pt for pt in traj if abs(pt[2] - d_sec) <= 0.35]
+                        if len(near_pts) >= 2 and abs(near_pts[-1][0] - near_pts[0][0]) > 4:
+                            move_dir = 1.0 if (near_pts[-1][0] - near_pts[0][0]) > 0 else -1.0
+                        else:
+                            move_dir = 1.0 if (traj[-1][0] - traj[0][0]) >= 0 else -1.0
 
-                    # Nose dips are farther ahead of the body centroid and wider/rounder than thin paw slips
-                    if rel_x > 20 or (rel_x > 12 and aspect_ratio > 1.25):
+                    if "body_left_x" in d and "body_width" in d:
+                        b_left = float(d["body_left_x"])
+                        b_w = max(28.0, float(d["body_width"]))
+                        if move_dir >= 0:
+                            rel_pos_norm = (dx - b_left) / b_w
+                        else:
+                            rel_pos_norm = ((b_left + b_w) - dx) / b_w
+                    else:
+                        closest_pt = min(traj, key=lambda pt: abs(pt[2] - d_sec)) if traj else (dx, dy, d_sec)
+                        cx_body = closest_pt[0]
+                        rel_pos_norm = 0.5 + (move_dir * (dx - cx_body) / 90.0)
+
+                    aspect_ratio = float(d.get("dip_aspect", 1.0))
+                    dip_depth = float(d.get("dip_depth", 10.0))
+
+                    if rel_pos_norm > 0.85 and aspect_ratio > 1.20 and dip_depth < 24:
                         d["dlc_part"] = "ORR (Exploráció)"
                         d["dlc_code"] = "NOSE"
-                    elif rel_x >= -24:
-                        d["dlc_part"] = "MANCS (Lábhiba)"
-                        d["dlc_code"] = "PAW"
+                    elif rel_pos_norm < 0.38:
+                        if aspect_ratio > 1.75 and dip_depth < 14:
+                            d["dlc_part"] = "FAROK (Billenés)"
+                            d["dlc_code"] = "HIND_TAIL"
+                        else:
+                            d["dlc_part"] = "HÁTSÓ LÁB (Lábhiba)"
+                            d["dlc_code"] = "PAW"
                     else:
-                        d["dlc_part"] = "HÁTSÓ LÁB / FAROK"
-                        d["dlc_code"] = "HIND_TAIL"
+                        d["dlc_part"] = "MELLSŐ LÁB (Lábhiba)"
+                        d["dlc_code"] = "PAW"
 
 
 # ==============================================================================
@@ -649,32 +1335,52 @@ class PerVideoIDTrackerApp:
         self.root = root
         self.lang = "hu"
         self.root.title(f"{APP_NAME} v{APP_VERSION}")
-        self.root.geometry("1260x890")
-        self.root.minsize(1080, 750)
+        self.root.geometry("1180x780")
+        self.root.minsize(980, 680)
         self.root.configure(bg=self.PALETTE["bg_main"])
 
         apply_window_icon(self.root)
 
         self.output_base_dir = SAFE_BASE_DIR
-
         self.video_data = []
         self.is_running = False
         self.completed_videos = 0
         self.pending_results = []
 
-        self.calib_dark_thresh = 120
-        self.calib_diff_thresh = 40
-        self.calib_ladder_thresh = 150
-        self.calib_fault_Ratio = 80
-
+        self.calib_dark_thresh = 135
+        self.calib_diff_thresh = 24
+        self.calib_ladder_thresh = 132
+        self.calib_fault_Ratio = 74
         self.saved_geometry = None
 
+        self.var_auto_calib = tk.BooleanVar(value=True)
+        self.var_yolo_fusion = tk.BooleanVar(value=True)
+        self.var_enable_review = tk.BooleanVar(value=True)
+        self.var_enable_zones = tk.BooleanVar(value=True)
+        self.var_enable_kinematics = tk.BooleanVar(value=True)
+        self.var_use_gpu = tk.BooleanVar(value=True)
+        self.var_use_kalman = tk.BooleanVar(value=True)
+        self.var_dlc_superanimal = tk.BooleanVar(value=True)
+        self.var_dlc_export_train = tk.BooleanVar(value=False)
+
+        self.var_threads = tk.StringVar(value="4")
+        self.var_stride = tk.StringVar(value="1")
+        self.var_cooldown = tk.StringVar(value="0.50")
+        self.var_min_dist = tk.StringVar(value="25")
+        self.var_gate_cm = tk.StringVar(value="60.0")
+        self.var_decimal = tk.StringVar(value=". (OriginPro)")
+
         self.kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        self.kernel_horiz = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 3))
+        self.kernel_horiz = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 3))
+        self.kernel_upper_bridge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 7))
         self.kernel_fill = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        self.kernel_rung_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        self.kernel_sag_guard = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 13))
 
         self.gpu_available = cv2.ocl.haveOpenCL()
         self.dlc_addon = DLCAddonManager(self.log)
+        self.auto_engine = AutoAdaptiveLadderEngine(self.log)
+        self.hybrid_locator = ParallelYoloOpenCVEngine(self.log)
 
         self._setup_styles()
         self._build_ui()
@@ -687,7 +1393,7 @@ class PerVideoIDTrackerApp:
 
     def toggle_language(self):
         self.lang = "en" if self.lang == "hu" else "hu"
-        self.btn_lang.config(text="🌐 HU / EN  [EN]" if self.lang == "en" else "🌐 HU / EN  [HU]")
+        self.btn_lang.config(text="🌐 EN" if self.lang == "en" else "🌐 HU")
         self._update_ui_texts()
         self._refresh_kpi_cards()
 
@@ -699,7 +1405,6 @@ class PerVideoIDTrackerApp:
         font_family = "SF Pro Display" if sys.platform == "darwin" else "Segoe UI"
         self.ui_font = font_family
         self.mono_font = "Menlo" if sys.platform == "darwin" else "Consolas"
-
         P = self.PALETTE
 
         style.configure("TFrame", background=P["bg_main"])
@@ -710,7 +1415,7 @@ class PerVideoIDTrackerApp:
             "Dark.TCheckbutton",
             background=P["bg_card"],
             foreground=P["text_main"],
-            font=(font_family, 9),
+            font=(font_family, 10, "bold"),
             focuscolor=P["bg_card"]
         )
         style.map(
@@ -723,7 +1428,7 @@ class PerVideoIDTrackerApp:
             "Treeview",
             background=P["bg_main"],
             foreground=P["text_main"],
-            rowheight=28,
+            rowheight=30,
             fieldbackground=P["bg_main"],
             borderwidth=0,
             font=(font_family, 10)
@@ -764,13 +1469,8 @@ class PerVideoIDTrackerApp:
         }
         for s_name, (bg_col, active_col, fg_col, fnt) in btn_specs.items():
             style.configure(
-                s_name,
-                background=bg_col,
-                foreground=fg_col,
-                font=fnt,
-                padding=(11, 6),
-                borderwidth=0,
-                relief="flat"
+                s_name, background=bg_col, foreground=fg_col, font=fnt,
+                padding=(12, 7), borderwidth=0, relief="flat"
             )
             style.map(
                 s_name,
@@ -794,10 +1494,7 @@ class PerVideoIDTrackerApp:
         accent_bar.pack(side="left", padx=(0, 8))
 
         lbl = tk.Label(
-            title_row,
-            text=title_text,
-            bg=P["bg_card"],
-            fg=P["text_main"],
+            title_row, text=title_text, bg=P["bg_card"], fg=P["text_main"],
             font=(self.ui_font, 10, "bold")
         )
         lbl.pack(side="left")
@@ -808,7 +1505,7 @@ class PerVideoIDTrackerApp:
         P = self.PALETTE
 
         # ── TOP HEADER BAR ──────────────────────────────────────────────────
-        header = tk.Frame(self.root, bg=P["bg_card"], padx=22, pady=12, highlightthickness=1, highlightbackground=P["border"])
+        header = tk.Frame(self.root, bg=P["bg_card"], padx=20, pady=10, highlightthickness=1, highlightbackground=P["border"])
         header.pack(fill="x")
 
         header_left = tk.Frame(header, bg=P["bg_card"])
@@ -818,49 +1515,47 @@ class PerVideoIDTrackerApp:
         title_line.pack(anchor="w")
 
         tk.Label(
-            title_line, text="🦊  MOUSEANALYZER", bg=P["bg_card"], fg=P["emerald"],
-            font=(self.ui_font, 15, "bold")
-        ).pack(side="left")
+            title_line, text="🦊 MOUSEANALYZER PRO", bg=P["bg_card"], fg=P["emerald"],
+            font=(self.ui_font, 14, "bold")
+        ).pack(side="left", padx=(0, 8))
+
         self.lbl_subtitle = tk.Label(
             title_line, text=self.tr("subtitle"),
-            bg=P["bg_card"], fg=P["text_main"], font=(self.ui_font, 12)
+            bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 11)
         )
         self.lbl_subtitle.pack(side="left")
 
         self.lbl_output_dir = tk.Label(
             header_left,
             text=f"{self.tr('out_dir_prefix')} {self.output_base_dir}",
-            bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9)
+            bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 8)
         )
-        self.lbl_output_dir.pack(anchor="w", pady=(3, 0))
+        self.lbl_output_dir.pack(anchor="w", pady=(2, 0))
 
         header_right = tk.Frame(header, bg=P["bg_card"])
         header_right.pack(side="right")
 
-        self.btn_lang = ttk.Button(
-            header_right, text="🌐 HU / EN  [HU]", command=self.toggle_language, style="Primary.TButton"
-        )
-        self.btn_lang.pack(side="left", padx=(0, 8))
+        self.btn_lang = ttk.Button(header_right, text="🌐 HU", command=self.toggle_language, style="Primary.TButton")
+        self.btn_lang.pack(side="left", padx=(0, 6))
 
-        self.btn_change_dir = ttk.Button(
-            header_right, text=self.tr("btn_change_dir"), command=self.choose_output_folder, style="Ghost.TButton"
-        )
-        self.btn_change_dir.pack(side="left", padx=(0, 8))
+        self.btn_change_dir = ttk.Button(header_right, text=self.tr("btn_change_dir"), command=self.choose_output_folder, style="Ghost.TButton")
+        self.btn_change_dir.pack(side="left", padx=(0, 6))
+        ToolTip(self.btn_change_dir, lambda: self.tr("tt_change_dir"))
 
-        self.btn_open_dir = ttk.Button(
-            header_right, text=self.tr("btn_open_dir"), command=self.open_results_folder, style="Wood.TButton"
-        )
+        self.btn_open_dir = ttk.Button(header_right, text=self.tr("btn_open_dir"), command=self.open_results_folder, style="Wood.TButton")
         self.btn_open_dir.pack(side="left")
+        ToolTip(self.btn_open_dir, lambda: self.tr("tt_open_dir"))
 
-        # ── KPI METRIC STRIP ────────────────────────────────────────────────
-        kpi_strip = tk.Frame(self.root, bg=P["bg_main"], padx=20, pady=8)
+        # ── COMPACT KPI METRIC STRIP ────────────────────────────────────────
+        kpi_strip = tk.Frame(self.root, bg=P["bg_main"], padx=20, pady=6)
         kpi_strip.pack(fill="x")
 
+        yolo_tag = "YOLO+OpenCV GPU" if self.hybrid_locator.yolo_model is not None else "Spatial-Core + OpenCV GPU"
         self.kpi_vars = {
             "videos": tk.StringVar(value="0"),
             "calib": tk.StringVar(value="-"),
-            "engine": tk.StringVar(value="Kalman + OpenCL GPU" if self.gpu_available else "Kalman + Multi-CPU"),
-            "dlc": tk.StringVar(value="SuperAnimal NN" if self.dlc_addon.dlc_available else "Vector + Morph AI")
+            "engine": tk.StringVar(value=yolo_tag),
+            "dlc": tk.StringVar(value="SuperAnimal NN" if self.dlc_addon.dlc_available else "BBox + Vector AI")
         }
 
         self.kpi_title_labels = {}
@@ -872,21 +1567,19 @@ class PerVideoIDTrackerApp:
         ]
 
         for idx, (k_key, k_tr_key, k_var, k_col) in enumerate(kpi_defs):
-            card = tk.Frame(kpi_strip, bg=P["bg_card"], padx=14, pady=8, highlightthickness=1, highlightbackground=P["border"])
+            card = tk.Frame(kpi_strip, bg=P["bg_card"], padx=12, pady=6, highlightthickness=1, highlightbackground=P["border"])
             card.pack(side="left", fill="x", expand=True, padx=(0 if idx == 0 else 6, 0))
             lbl_t = tk.Label(card, text=self.tr(k_tr_key), bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 8, "bold"))
             lbl_t.pack(anchor="w")
             self.kpi_title_labels[k_key] = lbl_t
-            tk.Label(card, textvariable=k_var, bg=P["bg_card"], fg=k_col, font=(self.ui_font, 11, "bold")).pack(anchor="w", pady=(2, 0))
+            tk.Label(card, textvariable=k_var, bg=P["bg_card"], fg=k_col, font=(self.ui_font, 10, "bold")).pack(anchor="w")
 
         # ── MAIN WORKSPACE CONTAINER ────────────────────────────────────────
         main_frame = tk.Frame(self.root, bg=P["bg_main"], padx=20, pady=2)
         main_frame.pack(fill="both", expand=True)
 
         # 1. VIDEO QUEUE CARD
-        list_outer, list_card, self.lbl_sec1 = self._create_section_card(
-            main_frame, self.tr("sec1_title"), P["emerald"]
-        )
+        list_outer, list_card, self.lbl_sec1 = self._create_section_card(main_frame, self.tr("sec1_title"), P["emerald"])
         list_outer.pack(fill="both", expand=True, pady=(0, 8))
 
         toolbar = tk.Frame(list_card, bg=P["bg_card"])
@@ -894,30 +1587,34 @@ class PerVideoIDTrackerApp:
 
         self.btn_add_vid = ttk.Button(toolbar, text=self.tr("btn_add_vid"), command=self.browse_videos, style="Emerald.TButton")
         self.btn_add_vid.pack(side="left", padx=(0, 6))
+        ToolTip(self.btn_add_vid, lambda: self.tr("tt_add_vid"))
 
         self.btn_edit_id = ttk.Button(toolbar, text=self.tr("btn_edit_id"), command=lambda: self.edit_animal_id(None), style="Ghost.TButton")
         self.btn_edit_id.pack(side="left", padx=(0, 6))
+        ToolTip(self.btn_edit_id, lambda: self.tr("tt_edit_id"))
 
         self.btn_remove_vid = ttk.Button(toolbar, text=self.tr("btn_remove_vid"), command=self.remove_selected_video, style="SoftRed.TButton")
         self.btn_remove_vid.pack(side="left", padx=(0, 6))
+        ToolTip(self.btn_remove_vid, lambda: self.tr("tt_remove_vid"))
 
         self.btn_clear_vid = ttk.Button(toolbar, text=self.tr("btn_clear_vid"), command=self.clear_videos, style="Ghost.TButton")
         self.btn_clear_vid.pack(side="right")
+        ToolTip(self.btn_clear_vid, lambda: self.tr("tt_clear_vid"))
 
         tree_container = tk.Frame(list_card, bg=P["border"], padx=1, pady=1)
         tree_container.pack(fill="both", expand=True)
 
         columns = ("filename", "animal_id", "status", "path")
-        self.tree = ttk.Treeview(tree_container, columns=columns, show="headings", height=5, selectmode="browse")
+        self.tree = ttk.Treeview(tree_container, columns=columns, show="headings", height=6, selectmode="browse")
         self.tree.heading("filename", text=self.tr("col_fname"))
         self.tree.heading("animal_id", text=self.tr("col_id"))
         self.tree.heading("status", text=self.tr("col_status"))
         self.tree.heading("path", text=self.tr("col_path"))
 
         self.tree.column("filename", width=260, anchor="w")
-        self.tree.column("animal_id", width=180, anchor="center")
+        self.tree.column("animal_id", width=140, anchor="center")
         self.tree.column("status", width=180, anchor="center")
-        self.tree.column("path", width=260, anchor="w")
+        self.tree.column("path", width=320, anchor="w")
         self.tree.pack(side="left", fill="both", expand=True)
 
         scrollbar = ttk.Scrollbar(tree_container, orient="vertical", command=self.tree.yview)
@@ -925,120 +1622,64 @@ class PerVideoIDTrackerApp:
         self.tree.configure(yscrollcommand=scrollbar.set)
         self.tree.bind("<Double-1>", self.edit_animal_id)
 
-        # 2. ANALYSIS & HARDWARE CONFIGURATION CARD
-        ctrl_outer, control_card, self.lbl_sec2 = self._create_section_card(
-            main_frame, self.tr("sec2_title"), P["wood_amber"]
-        )
+        # 2. CLEAN STREAMLINED EXECUTION & SETTINGS BAR
+        ctrl_outer, control_card, self.lbl_sec2 = self._create_section_card(main_frame, self.tr("sec2_title"), P["wood_amber"])
         ctrl_outer.pack(fill="x", pady=(0, 8))
 
-        opt_frame1 = tk.Frame(control_card, bg=P["bg_card"])
-        opt_frame1.pack(fill="x", pady=(0, 6))
+        top_ctrl_row = tk.Frame(control_card, bg=P["bg_card"])
+        top_ctrl_row.pack(fill="x", pady=(0, 8))
 
-        self.var_enable_zones = tk.BooleanVar(value=True)
-        self.chk_zones = ttk.Checkbutton(
-            opt_frame1, text=self.tr("chk_zones"), variable=self.var_enable_zones, style="Dark.TCheckbutton"
+        self.chk_auto_calib = ttk.Checkbutton(
+            top_ctrl_row, text=self.tr("chk_auto_calib"), variable=self.var_auto_calib, style="Dark.TCheckbutton"
         )
-        self.chk_zones.pack(side="left", padx=(0, 14))
+        self.chk_auto_calib.pack(side="left", padx=(0, 14))
+        ToolTip(self.chk_auto_calib, lambda: self.tr("tt_auto_calib"))
 
-        self.var_enable_kinematics = tk.BooleanVar(value=True)
-        self.chk_kin = ttk.Checkbutton(
-            opt_frame1, text=self.tr("chk_kin"), variable=self.var_enable_kinematics, style="Dark.TCheckbutton"
+        self.chk_yolo_fusion = ttk.Checkbutton(
+            top_ctrl_row, text=self.tr("chk_yolo_fusion"), variable=self.var_yolo_fusion, style="Dark.TCheckbutton"
         )
-        self.chk_kin.pack(side="left", padx=(0, 14))
+        self.chk_yolo_fusion.pack(side="left", padx=(0, 14))
+        ToolTip(self.chk_yolo_fusion, lambda: self.tr("tt_yolo"))
 
-        self.var_enable_review = tk.BooleanVar(value=True)
         self.chk_rev = ttk.Checkbutton(
-            opt_frame1, text=self.tr("chk_rev"), variable=self.var_enable_review, style="Dark.TCheckbutton"
+            top_ctrl_row, text=self.tr("chk_rev"), variable=self.var_enable_review, style="Dark.TCheckbutton"
         )
         self.chk_rev.pack(side="left", padx=(0, 14))
+        ToolTip(self.chk_rev, lambda: self.tr("tt_rev"))
 
-        self.var_use_gpu = tk.BooleanVar(value=(sys.platform != "win32"))
-        self.chk_gpu = ttk.Checkbutton(
-            opt_frame1, text=self.tr("chk_gpu"), variable=self.var_use_gpu, style="Dark.TCheckbutton"
+        self.lbl_gatecm = tk.Label(top_ctrl_row, text=self.tr("lbl_gatecm"), bg=P["bg_card"], fg=P["emerald"], font=(self.ui_font, 9, "bold"))
+        self.lbl_gatecm.pack(side="left")
+        self.spin_gate_cm = tk.Spinbox(
+            top_ctrl_row, from_=5.0, to=500.0, increment=1.0, textvariable=self.var_gate_cm, width=5,
+            font=(self.ui_font, 10, "bold"), bg=P["bg_panel"], fg=P["text_main"],
+            insertbackground=P["text_main"], buttonbackground=P["border"], relief="flat"
         )
-        self.chk_gpu.pack(side="left")
+        self.spin_gate_cm.pack(side="left", padx=(4, 10))
+        ToolTip(self.spin_gate_cm, lambda: self.tr("tt_gatecm"))
 
-        # AI / Kalman / DLC Banner strip
-        opt_frame_dlc = tk.Frame(control_card, bg=P["bg_panel"], padx=10, pady=6, highlightthickness=1, highlightbackground=P["border"])
-        opt_frame_dlc.pack(fill="x", pady=(0, 8))
-
-        self.var_use_kalman = tk.BooleanVar(value=True)
-        self.chk_kalman = tk.Checkbutton(
-            opt_frame_dlc, text=self.tr("chk_kalman"),
-            variable=self.var_use_kalman, bg=P["bg_panel"], fg="#38BDF8",
-            selectcolor=P["bg_main"], activebackground=P["bg_panel"], activeforeground="#38BDF8",
-            font=(self.ui_font, 9, "bold")
+        self.btn_settings = ttk.Button(
+            top_ctrl_row, text=self.tr("btn_settings"), command=self.open_advanced_settings_dialog, style="Ghost.TButton"
         )
-        self.chk_kalman.pack(side="left", padx=(0, 14))
-
-        self.var_dlc_superanimal = tk.BooleanVar(value=True)
-        self.chk_dlc_sa = tk.Checkbutton(
-            opt_frame_dlc, text=self.tr("chk_dlc_sa"),
-            variable=self.var_dlc_superanimal, bg=P["bg_panel"], fg="#6EE7B7",
-            selectcolor=P["bg_main"], activebackground=P["bg_panel"], activeforeground="#6EE7B7",
-            font=(self.ui_font, 9, "bold")
-        )
-        self.chk_dlc_sa.pack(side="left", padx=(0, 14))
-
-        self.var_dlc_export_train = tk.BooleanVar(value=True)
-        self.chk_dlc_exp = tk.Checkbutton(
-            opt_frame_dlc, text=self.tr("chk_dlc_exp"),
-            variable=self.var_dlc_export_train, bg=P["bg_panel"], fg="#FBBF24",
-            selectcolor=P["bg_main"], activebackground=P["bg_panel"], activeforeground="#FBBF24",
-            font=(self.ui_font, 9, "bold")
-        )
-        self.chk_dlc_exp.pack(side="left")
-
-        # Numeric Spinboxes + Decimal Separator + JSON Profile Buttons
-        param_row = tk.Frame(control_card, bg=P["bg_main"], padx=10, pady=7, highlightthickness=1, highlightbackground=P["border"])
-        param_row.pack(fill="x", pady=(0, 8))
-
-        def make_spin(parent, tr_key, from_, to_, val, width=4, inc=1.0, fg_col=P["text_main"]):
-            lbl = tk.Label(parent, text=self.tr(tr_key), bg=P["bg_main"], fg=fg_col, font=(self.ui_font, 9, "bold"))
-            lbl.pack(side="left")
-            sp = tk.Spinbox(
-                parent, from_=from_, to=to_, increment=inc, width=width,
-                font=(self.ui_font, 10, "bold"), bg=P["bg_panel"], fg=P["text_main"],
-                insertbackground=P["text_main"], buttonbackground=P["border"], relief="flat"
-            )
-            sp.pack(side="left", padx=(4, 10))
-            sp.delete(0, tk.END)
-            sp.insert(0, str(val))
-            return lbl, sp
-
-        self.lbl_threads, self.spin_threads = make_spin(param_row, "lbl_threads", 1, 16, "4", width=3, inc=1)
-        self.lbl_stride, self.spin_stride = make_spin(param_row, "lbl_stride", 1, 5, "1", width=3, inc=1, fg_col="#FBBF24")
-        self.lbl_cooldown, self.spin_cooldown = make_spin(param_row, "lbl_cooldown", 0.05, 5.0, "0.50", width=5, inc=0.05, fg_col="#38BDF8")
-        self.lbl_mindist, self.spin_min_dist = make_spin(param_row, "lbl_mindist", 0, 200, "25", width=4, inc=5)
-        self.lbl_gatecm, self.spin_gate_cm = make_spin(param_row, "lbl_gatecm", 1.0, 500.0, "60.0", width=5, inc=1.0, fg_col=P["emerald"])
-
-        self.lbl_dec = tk.Label(param_row, text=self.tr("lbl_dec"), bg=P["bg_main"], fg="#A78BFA", font=(self.ui_font, 9, "bold"))
-        self.lbl_dec.pack(side="left")
-        self.var_decimal = tk.StringVar(value=".")
-        self.combo_dec = ttk.Combobox(param_row, textvariable=self.var_decimal, values=[". (OriginPro)", ", (HU Excel)"], width=11, state="readonly")
-        self.combo_dec.current(0)
-        self.combo_dec.pack(side="left", padx=(4, 8))
-
-        self.btn_load_prof = ttk.Button(param_row, text=self.tr("btn_load_prof"), command=self.load_calibration_json, style="Ghost.TButton")
-        self.btn_load_prof.pack(side="right", padx=(4, 0))
-
-        self.btn_save_prof = ttk.Button(param_row, text=self.tr("btn_save_prof"), command=self.save_calibration_json, style="Ghost.TButton")
-        self.btn_save_prof.pack(side="right", padx=(4, 4))
+        self.btn_settings.pack(side="right")
+        ToolTip(self.btn_settings, lambda: self.tr("tt_settings"))
 
         # Action Launch Row
         ctrl_top = tk.Frame(control_card, bg=P["bg_card"])
-        ctrl_top.pack(fill="x", pady=(2, 0))
+        ctrl_top.pack(fill="x")
 
         self.btn_start = ttk.Button(ctrl_top, text=self.tr("btn_start"), command=self.start_workflow, style="Emerald.TButton")
         self.btn_start.pack(side="left", expand=True, fill="x", padx=(0, 6))
+        ToolTip(self.btn_start, lambda: self.tr("tt_start"))
 
         self.btn_quick_start = ttk.Button(
-            ctrl_top, text=self.tr("btn_quick"), command=self.start_quick_workflow, style="Teal.TButton", state="disabled"
+            ctrl_top, text=self.tr("btn_quick"), command=self.start_quick_workflow, style="Teal.TButton"
         )
         self.btn_quick_start.pack(side="left", expand=True, fill="x", padx=6)
+        ToolTip(self.btn_quick_start, lambda: self.tr("tt_quick"))
 
         self.btn_stop = ttk.Button(ctrl_top, text=self.tr("btn_stop"), command=self.stop_analysis, style="Danger.TButton", state="disabled")
         self.btn_stop.pack(side="left", padx=(6, 0))
+        ToolTip(self.btn_stop, lambda: self.tr("tt_stop"))
 
         # Progress bar
         prog_frame = tk.Frame(control_card, bg=P["bg_card"])
@@ -1054,30 +1695,99 @@ class PerVideoIDTrackerApp:
         self.progress_bar.pack(fill="x")
 
         # 3. CONSOLE LOG CARD
-        log_outer, log_card, self.lbl_sec3 = self._create_section_card(
-            main_frame, self.tr("sec3_title"), "#38BDF8"
-        )
+        log_outer, log_card, self.lbl_sec3 = self._create_section_card(main_frame, self.tr("sec3_title"), "#38BDF8")
         log_outer.pack(fill="both", expand=True, pady=(0, 8))
 
         self.log_area = scrolledtext.ScrolledText(
             log_card, wrap=tk.WORD, font=(self.mono_font, 9),
-            height=6, state="disabled", bg=P["bg_main"], fg="#E2E8F0",
+            height=5, state="disabled", bg=P["bg_main"], fg="#E2E8F0",
             insertbackground=P["emerald"], relief="flat", borderwidth=0
         )
         self.log_area.pack(fill="both", expand=True)
 
         self.log(
-            f"{APP_NAME} v{APP_VERSION} Ready! Output: {self.output_base_dir}\n"
-            f"GPU OpenCL: {'YES' if self.gpu_available else 'NO'} | "
-            f"Kalman Filter + MOG2 Fusion: ACTIVE | "
-            f"DeepLabCut: {'ACTIVE' if self.dlc_addon.dlc_available else 'Vector+Morphological AI'}."
+            f"{APP_NAME} v{APP_VERSION} Ready! | Parallel YOLO + OpenCV Spatial Gating & Strict Rung Protection Active."
         )
+
+    # ==========================================================================
+    # COLLAPSIBLE / POPUP ADVANCED SETTINGS WINDOW
+    # ==========================================================================
+    def open_advanced_settings_dialog(self):
+        P = self.PALETTE
+        win = tk.Toplevel(self.root)
+        win.title(self.tr("settings_title"))
+        win.geometry("680x440")
+        win.configure(bg=P["bg_card"])
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+
+        container = tk.Frame(win, bg=P["bg_card"], padx=22, pady=18)
+        container.pack(fill="both", expand=True)
+
+        tk.Label(
+            container, text=self.tr("settings_title"),
+            bg=P["bg_card"], fg=P["emerald"], font=(self.ui_font, 12, "bold")
+        ).pack(anchor="w", pady=(0, 12))
+
+        chk_panel = tk.Frame(container, bg=P["bg_panel"], padx=14, pady=12, highlightthickness=1, highlightbackground=P["border"])
+        chk_panel.pack(fill="x", pady=(0, 14))
+
+        for tr_key, var, col in [
+            ("chk_yolo_fusion", self.var_yolo_fusion, P["emerald"]),
+            ("chk_zones", self.var_enable_zones, P["text_main"]),
+            ("chk_kin", self.var_enable_kinematics, P["text_main"]),
+            ("chk_gpu", self.var_use_gpu, "#38BDF8"),
+            ("chk_kalman", self.var_use_kalman, "#6EE7B7"),
+            ("chk_dlc_sa", self.var_dlc_superanimal, "#A78BFA"),
+            ("chk_dlc_exp", self.var_dlc_export_train, "#FBBF24"),
+        ]:
+            cb = tk.Checkbutton(
+                chk_panel, text=self.tr(tr_key), variable=var,
+                bg=P["bg_panel"], fg=col, selectcolor=P["bg_main"],
+                activebackground=P["bg_panel"], activeforeground=col,
+                font=(self.ui_font, 9, "bold"), anchor="w"
+            )
+            cb.pack(fill="x", pady=2)
+
+        num_panel = tk.Frame(container, bg=P["bg_main"], padx=14, pady=12, highlightthickness=1, highlightbackground=P["border"])
+        num_panel.pack(fill="x", pady=(0, 14))
+
+        def add_spin_item(parent, tr_key, var, from_, to_, inc, width=5):
+            box = tk.Frame(parent, bg=P["bg_main"])
+            box.pack(side="left", padx=(0, 14))
+            tk.Label(box, text=self.tr(tr_key), bg=P["bg_main"], fg=P["text_muted"], font=(self.ui_font, 8, "bold")).pack(anchor="w")
+            sp = tk.Spinbox(
+                box, from_=from_, to=to_, increment=inc, textvariable=var, width=width,
+                font=(self.ui_font, 10, "bold"), bg=P["bg_panel"], fg=P["text_main"],
+                insertbackground=P["text_main"], buttonbackground=P["border"], relief="flat"
+            )
+            sp.pack(anchor="w", pady=(2, 0))
+
+        add_spin_item(num_panel, "lbl_threads", self.var_threads, 1, 16, 1, width=4)
+        add_spin_item(num_panel, "lbl_stride", self.var_stride, 1, 5, 1, width=4)
+        add_spin_item(num_panel, "lbl_cooldown", self.var_cooldown, 0.05, 5.0, 0.05, width=6)
+        add_spin_item(num_panel, "lbl_mindist", self.var_min_dist, 0, 200, 5, width=5)
+
+        dec_box = tk.Frame(num_panel, bg=P["bg_main"])
+        dec_box.pack(side="left")
+        tk.Label(dec_box, text=self.tr("lbl_dec"), bg=P["bg_main"], fg=P["text_muted"], font=(self.ui_font, 8, "bold")).pack(anchor="w")
+        combo_dec = ttk.Combobox(dec_box, textvariable=self.var_decimal, values=[". (OriginPro)", ", (HU Excel)"], width=12, state="readonly")
+        combo_dec.pack(anchor="w", pady=(2, 0))
+
+        bottom_row = tk.Frame(container, bg=P["bg_card"])
+        bottom_row.pack(fill="x")
+
+        ttk.Button(bottom_row, text=self.tr("btn_load_prof"), command=self.load_calibration_json, style="Ghost.TButton").pack(side="left", padx=(0, 8))
+        ttk.Button(bottom_row, text=self.tr("btn_save_prof"), command=self.save_calibration_json, style="Ghost.TButton").pack(side="left")
+        ttk.Button(bottom_row, text=self.tr("btn_close_settings"), command=win.destroy, style="Emerald.TButton").pack(side="right")
 
     def _update_ui_texts(self):
         self.lbl_subtitle.config(text=self.tr("subtitle"))
         self.lbl_output_dir.config(text=f"{self.tr('out_dir_prefix')} {self.output_base_dir}")
         self.btn_change_dir.config(text=self.tr("btn_change_dir"))
         self.btn_open_dir.config(text=self.tr("btn_open_dir"))
+        self.btn_settings.config(text=self.tr("btn_settings"))
 
         for k_key, tr_key in [("videos", "kpi_videos"), ("calib", "kpi_calib"), ("engine", "kpi_engine"), ("dlc", "kpi_dlc")]:
             self.kpi_title_labels[k_key].config(text=self.tr(tr_key))
@@ -1094,23 +1804,11 @@ class PerVideoIDTrackerApp:
         self.tree.heading("path", text=self.tr("col_path"))
 
         self.lbl_sec2.config(text=self.tr("sec2_title"))
-        self.chk_zones.config(text=self.tr("chk_zones"))
-        self.chk_kin.config(text=self.tr("chk_kin"))
+        self.chk_auto_calib.config(text=self.tr("chk_auto_calib"))
+        self.chk_yolo_fusion.config(text=self.tr("chk_yolo_fusion"))
         self.chk_rev.config(text=self.tr("chk_rev"))
-        self.chk_gpu.config(text=self.tr("chk_gpu"))
-        self.chk_kalman.config(text=self.tr("chk_kalman"))
-        self.chk_dlc_sa.config(text=self.tr("chk_dlc_sa"))
-        self.chk_dlc_exp.config(text=self.tr("chk_dlc_exp"))
-
-        self.lbl_threads.config(text=self.tr("lbl_threads"))
-        self.lbl_stride.config(text=self.tr("lbl_stride"))
-        self.lbl_cooldown.config(text=self.tr("lbl_cooldown"))
-        self.lbl_mindist.config(text=self.tr("lbl_mindist"))
         self.lbl_gatecm.config(text=self.tr("lbl_gatecm"))
-        self.lbl_dec.config(text=self.tr("lbl_dec"))
 
-        self.btn_load_prof.config(text=self.tr("btn_load_prof"))
-        self.btn_save_prof.config(text=self.tr("btn_save_prof"))
         self.btn_start.config(text=self.tr("btn_start"))
         self.btn_quick_start.config(text=self.tr("btn_quick"))
         self.btn_stop.config(text=self.tr("btn_stop"))
@@ -1140,23 +1838,24 @@ class PerVideoIDTrackerApp:
 
     def _build_profile_dict(self):
         try:
-            cooldown_val = float(self.spin_cooldown.get())
+            cooldown_val = float(self.var_cooldown.get())
         except ValueError:
             cooldown_val = 0.50
         try:
-            min_dist_val = int(self.spin_min_dist.get())
+            min_dist_val = int(self.var_min_dist.get())
         except ValueError:
             min_dist_val = 25
         try:
-            gate_cm_val = float(self.spin_gate_cm.get())
+            gate_cm_val = float(self.var_gate_cm.get())
         except ValueError:
             gate_cm_val = 60.0
         try:
-            stride_val = max(1, int(self.spin_stride.get()))
+            stride_val = max(1, int(self.var_stride.get()))
         except ValueError:
             stride_val = 1
 
         return {
+            "profile_version": "3.5",
             "language": self.lang,
             "calib_dark_thresh": self.calib_dark_thresh,
             "calib_diff_thresh": self.calib_diff_thresh,
@@ -1166,6 +1865,8 @@ class PerVideoIDTrackerApp:
             "dip_min_dist_px": min_dist_val,
             "gate_dist_cm": gate_cm_val,
             "frame_stride": stride_val,
+            "auto_calib": self.var_auto_calib.get(),
+            "yolo_fusion": self.var_yolo_fusion.get(),
             "enable_zones": self.var_enable_zones.get(),
             "enable_kinematics": self.var_enable_kinematics.get(),
             "enable_review": self.var_enable_review.get(),
@@ -1180,25 +1881,24 @@ class PerVideoIDTrackerApp:
         if "language" in data and data["language"] in ("hu", "en") and data["language"] != self.lang:
             self.toggle_language()
 
-        self.calib_dark_thresh = int(data.get("calib_dark_thresh", 120))
-        self.calib_diff_thresh = int(data.get("calib_diff_thresh", 40))
-        self.calib_ladder_thresh = int(data.get("calib_ladder_thresh", 150))
-        self.calib_fault_Ratio = int(data.get("calib_fault_Ratio", 80))
+        if data.get("profile_version") == "3.5":
+            self.calib_dark_thresh = int(data.get("calib_dark_thresh", 135))
+            self.calib_diff_thresh = int(data.get("calib_diff_thresh", 24))
+            self.calib_ladder_thresh = int(data.get("calib_ladder_thresh", 132))
+            self.calib_fault_Ratio = int(data.get("calib_fault_Ratio", 74))
 
         if "dip_cooldown_sec" in data:
-            self.spin_cooldown.delete(0, tk.END)
-            self.spin_cooldown.insert(0, f"{float(data['dip_cooldown_sec']):.2f}")
+            self.var_cooldown.set(f"{float(data['dip_cooldown_sec']):.2f}")
         if "dip_min_dist_px" in data:
-            self.spin_min_dist.delete(0, tk.END)
-            self.spin_min_dist.insert(0, str(int(data["dip_min_dist_px"])))
+            self.var_min_dist.set(str(int(data["dip_min_dist_px"])))
         if "gate_dist_cm" in data:
-            self.spin_gate_cm.delete(0, tk.END)
-            self.spin_gate_cm.insert(0, f"{float(data['gate_dist_cm']):.1f}")
+            self.var_gate_cm.set(f"{float(data['gate_dist_cm']):.1f}")
         if "frame_stride" in data:
-            self.spin_stride.delete(0, tk.END)
-            self.spin_stride.insert(0, str(max(1, int(data["frame_stride"]))))
+            self.var_stride.set(str(max(1, int(data["frame_stride"]))))
 
         for key, var in [
+            ("auto_calib", self.var_auto_calib),
+            ("yolo_fusion", self.var_yolo_fusion),
             ("enable_zones", self.var_enable_zones),
             ("enable_kinematics", self.var_enable_kinematics),
             ("enable_review", self.var_enable_review),
@@ -1213,7 +1913,6 @@ class PerVideoIDTrackerApp:
         geom = data.get("geometry")
         if isinstance(geom, dict) and all(k in geom for k in ("rx", "ry", "rw", "rh", "left_gate_x", "right_gate_x")):
             self.saved_geometry = geom
-            self.btn_quick_start.config(state="normal")
         self._refresh_kpi_cards()
 
     def _try_autoload_last_profile(self):
@@ -1223,13 +1922,6 @@ class PerVideoIDTrackerApp:
                 with open(default_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 self._apply_profile_dict(data)
-                if self.saved_geometry:
-                    g = self.saved_geometry
-                    self.log(
-                        f"[Auto-Profile] 'utolso_kalibracio.json' loaded! "
-                        f"ROI=({g['rx']},{g['ry']},{g['rw']}x{g['rh']}), "
-                        f"Gates X=({g['left_gate_x']} -> {g['right_gate_x']})."
-                    )
             except Exception:
                 pass
 
@@ -1243,9 +1935,8 @@ class PerVideoIDTrackerApp:
         if not fpath:
             return
         try:
-            data = self._build_profile_dict()
             with open(fpath, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4, ensure_ascii=False)
+                json.dump(self._build_profile_dict(), f, indent=4, ensure_ascii=False)
             self.log(f"💾 Profile saved: {fpath}")
         except Exception as e:
             messagebox.showerror("Error", str(e))
@@ -1262,6 +1953,7 @@ class PerVideoIDTrackerApp:
         try:
             with open(fpath, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            data["profile_version"] = "3.5"
             self._apply_profile_dict(data)
             self.log(f"📂 Profile loaded: {os.path.basename(fpath)}")
         except Exception as e:
@@ -1355,13 +2047,13 @@ class PerVideoIDTrackerApp:
 
         top = tk.Toplevel(self.root)
         top.title(self.tr("edit_id_title"))
-        top.geometry("380x175")
+        top.geometry("360x165")
         top.configure(bg=P["bg_card"])
         top.resizable(False, False)
         top.transient(self.root)
         top.grab_set()
 
-        tk.Label(top, text=current_values[0], bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9)).pack(pady=(14, 2))
+        tk.Label(top, text=current_values[0], bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9)).pack(pady=(12, 2))
         tk.Label(top, text=self.tr("edit_id_prompt"), bg=P["bg_card"], fg=P["text_main"], font=(self.ui_font, 10, "bold")).pack(pady=2)
 
         entry = tk.Entry(
@@ -1385,7 +2077,7 @@ class PerVideoIDTrackerApp:
             top.destroy()
 
         entry.bind("<Return>", save_id)
-        ttk.Button(top, text=self.tr("btn_save_enter"), command=save_id, style="Emerald.TButton").pack(pady=6)
+        ttk.Button(top, text=self.tr("btn_save_enter"), command=save_id, style="Emerald.TButton").pack(pady=4)
 
     def open_results_folder(self):
         folder = os.path.abspath(self.output_base_dir)
@@ -1419,9 +2111,6 @@ class PerVideoIDTrackerApp:
         if not self.video_data:
             messagebox.showerror(self.tr("msg_no_vid_title"), self.tr("msg_no_vid_body"))
             return
-        if not self.saved_geometry:
-            messagebox.showwarning(self.tr("msg_no_geom_title"), self.tr("msg_no_geom_body"))
-            return
 
         self.is_running = True
         self.completed_videos = 0
@@ -1431,13 +2120,42 @@ class PerVideoIDTrackerApp:
         self.btn_quick_start.config(state="disabled")
         self.btn_stop.config(state="normal")
 
-        g = self.saved_geometry
-        self._launch_processing_thread(
-            g["rx"], g["ry"], g["rw"], g["rh"],
-            g["left_gate_x"], g["right_gate_x"]
-        )
+        if self.saved_geometry:
+            g = self.saved_geometry
+            self._launch_processing_thread(
+                g["rx"], g["ry"], g["rw"], g["rh"],
+                g["left_gate_x"], g["right_gate_x"]
+            )
+        else:
+            first_video = self.video_data[0]["path"]
+            cap = open_video_accelerated(first_video, use_hw=self.var_use_gpu.get())
+            try:
+                calib = self.auto_engine.auto_calibrate_from_video(cap, num_bg_samples=28)
+                self.calib_dark_thresh = calib["calib_dark_thresh"]
+                self.calib_diff_thresh = calib["calib_diff_thresh"]
+                self.calib_ladder_thresh = calib["calib_ladder_thresh"]
+                self.calib_fault_Ratio = calib["calib_fault_Ratio"]
+                self.saved_geometry = {
+                    "rx": calib["rx"], "ry": calib["ry"],
+                    "rw": calib["rw"], "rh": calib["rh"],
+                    "left_gate_x": calib["left_gate_x"],
+                    "right_gate_x": calib["right_gate_x"]
+                }
+                self._refresh_kpi_cards()
+                self._launch_processing_thread(
+                    calib["rx"], calib["ry"], calib["rw"], calib["rh"],
+                    calib["left_gate_x"], calib["right_gate_x"]
+                )
+            except Exception as e:
+                messagebox.showerror("Auto-Calib Error", str(e))
+                self.reset_ui()
+            finally:
+                cap.release()
 
-    def _compute_clean_background(self, cap, rx, ry, rw, rh, num_samples=16):
+    # ==========================================================================
+    # PARALLEL YOLO + OPENCV SEGMENTATION WITH STRICT RUNG PROTECTION
+    # ==========================================================================
+    def _compute_clean_background(self, cap, rx, ry, rw, rh, num_samples=28):
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         bg_frames = []
 
@@ -1447,63 +2165,140 @@ class PerVideoIDTrackerApp:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
                 r, f = cap.read()
                 if r and f is not None:
-                    bg_frames.append(cv2.cvtColor(f[ry:ry+rh, rx:rx+rw], cv2.COLOR_BGR2GRAY))
+                    crop = f[ry:ry + rh, rx:rx + rw]
+                    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+                    bg_frames.append(np.squeeze(gray))
         else:
-            for _ in range(12):
+            for _ in range(14):
                 r, f = cap.read()
                 if r and f is not None:
-                    bg_frames.append(cv2.cvtColor(f[ry:ry+rh, rx:rx+rw], cv2.COLOR_BGR2GRAY))
+                    crop = f[ry:ry + rh, rx:rx + rw]
+                    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+                    bg_frames.append(np.squeeze(gray))
 
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         if not bg_frames:
             return None
-        return np.median(bg_frames, axis=0).astype(np.uint8)
+        stack = np.stack(bg_frames, axis=0)
+        return np.percentile(stack, 95, axis=0).astype(np.uint8)
 
-    def _create_ladder_mask(self, base_gray, ladder_thresh):
-        _, ladder_mask = cv2.threshold(base_gray, ladder_thresh, 255, cv2.THRESH_BINARY_INV)
-        ladder_mask = cv2.dilate(ladder_mask, self.kernel_small, iterations=1)
+    def _create_ladder_mask(self, base_gray, ladder_thresh, fault_y_local=None):
+        """
+        Creates a rock-solid blue ladder mask covering the metallic rods and their bottom tips.
+        Leaves the upper mouse torso corridor (>20px above fault line) completely clear.
+        """
+        if base_gray.ndim == 3:
+            base_gray = cv2.cvtColor(base_gray, cv2.COLOR_BGR2GRAY)
+        base_gray = np.squeeze(base_gray).astype(np.uint8)
+        rh, rw = base_gray.shape[:2]
+
+        _, dark_rungs = cv2.threshold(base_gray, ladder_thresh, 255, cv2.THRESH_BINARY_INV)
+
+        k_bh = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+        blackhat = cv2.morphologyEx(base_gray, cv2.MORPH_BLACKHAT, k_bh)
+        _, bh_mask = cv2.threshold(blackhat, max(15, int((205 - ladder_thresh) * 0.28)), 255, cv2.THRESH_BINARY)
+
+        edges = cv2.Canny(base_gray, 45, 125)
+
+        raw_rungs = cv2.bitwise_or(dark_rungs, cv2.bitwise_or(bh_mask, edges))
+        closed_rungs = cv2.morphologyEx(raw_rungs, cv2.MORPH_CLOSE, self.kernel_rung_close)
+
+        contours, _ = cv2.findContours(closed_rungs, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        clean_ladder = np.zeros_like(base_gray)
+        max_rung_start_y = int(fault_y_local + 4) if fault_y_local is not None else int(rh * 0.82)
+
+        for c in contours:
+            if cv2.contourArea(c) >= 18:
+                x_c, y_c, w_c, h_c = cv2.boundingRect(c)
+                if h_c > 38 and w_c < 18:
+                    continue
+                if y_c <= max_rung_start_y:
+                    cv2.drawContours(clean_ladder, [c], -1, 255, -1)
+
+        ladder_mask = cv2.dilate(clean_ladder, self.kernel_sag_guard, iterations=1)
+
+        if fault_y_local is not None:
+            top_clear_y = max(5, int(fault_y_local) - 22)
+            bottom_cutoff = min(rh, int(fault_y_local) + 22)
+            ladder_mask[:top_clear_y, :] = 0
+            ladder_mask[bottom_cutoff:, :] = 0
+        else:
+            top_clear_y = max(5, int(rh * 0.45))
+            ladder_mask[:top_clear_y, :] = 0
+
         return ladder_mask
 
     def _detect_mouse_on_crop(
         self, crop, base_gray, inv_ladder_mask, rw, rh, dark_t, diff_t,
-        use_umat=False, u_base_gray=None, u_inv_ladder=None, mog2_subtractor=None
+        fault_y_local=None, use_umat=False, u_base_smooth=None, u_inv_ladder=None, mog2_subtractor=None
     ):
-        if use_umat and u_base_gray is not None and u_inv_ladder is not None:
+        """
+        Parallel YOLO + OpenCV Spatial Gating with Strict Rung Protection:
+        1. Locates the rodent's torso core first (via OpenCV + parallel YOLO).
+        2. Restricts the search space (`spatial_gate`) to the animal's true footprint so distant rungs NEVER turn green!
+        3. NEVER overrides the blue ladder mask (`inv_ladder_mask`) at or near the fault line,
+           eliminating the green rungs and false red dip circles seen in your screenshot!
+        """
+        if fault_y_local is None:
+            fault_y_local = int(rh * 0.72)
+
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        gray = np.squeeze(gray).astype(np.uint8)
+
+        gray_smooth = cv2.GaussianBlur(gray, (3, 3), 0)
+        base_smooth = cv2.GaussianBlur(base_gray, (3, 3), 0)
+
+        # STEP 1: Locate animal & build spatial gate (YOLO + OpenCV Torso Core)
+        core_bbox, spatial_gate = None, None
+        if self.var_yolo_fusion.get():
+            core_bbox, spatial_gate = self.hybrid_locator.locate_animal_roi_and_mask(
+                crop, gray_smooth, base_smooth, inv_ladder_mask, fault_y_local, dark_t, diff_t
+            )
+            if core_bbox is None:
+                return False, None, None
+
+        # STEP 2: Compute pixel-level mouse mask (GPU UMat or CPU)
+        if use_umat and u_base_smooth is not None and u_inv_ladder is not None:
             u_crop = cv2.UMat(crop)
-            u_gray = cv2.cvtColor(u_crop, cv2.COLOR_BGR2GRAY)
-            u_diff = cv2.subtract(u_base_gray, u_gray)
-            _, u_diff_mask = cv2.threshold(u_diff, diff_t, 255, cv2.THRESH_BINARY)
-            _, u_dark_mask = cv2.threshold(u_gray, dark_t, 255, cv2.THRESH_BINARY_INV)
+            u_gray = cv2.cvtColor(u_crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else u_crop
+            u_gray_smooth = cv2.GaussianBlur(u_gray, (3, 3), 0)
 
+            u_diff = cv2.subtract(u_base_smooth, u_gray_smooth)
+            _, u_diff_mask = cv2.threshold(u_diff, max(16, diff_t), 255, cv2.THRESH_BINARY)
+            _, u_dark_mask = cv2.threshold(u_gray_smooth, dark_t, 255, cv2.THRESH_BINARY_INV)
             u_raw = cv2.bitwise_and(u_diff_mask, u_dark_mask)
-            u_raw = cv2.bitwise_and(u_raw, u_inv_ladder)
 
+            # STRICT RUNG PROTECTION: Never override u_inv_ladder near the rungs!
+            u_raw = cv2.bitwise_and(u_raw, u_inv_ladder)
             u_clean = cv2.morphologyEx(u_raw, cv2.MORPH_OPEN, self.kernel_small)
             u_clean = cv2.morphologyEx(u_clean, cv2.MORPH_CLOSE, self.kernel_horiz)
-            u_clean = cv2.dilate(u_clean, self.kernel_small, iterations=1)
             u_clean = cv2.bitwise_and(u_clean, u_inv_ladder)
             clean_mask = u_clean.get()
         else:
-            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            diff = cv2.subtract(base_gray, gray)
-            _, diff_mask = cv2.threshold(diff, diff_t, 255, cv2.THRESH_BINARY)
-            _, dark_mask = cv2.threshold(gray, dark_t, 255, cv2.THRESH_BINARY_INV)
-
+            diff = cv2.subtract(base_smooth, gray_smooth)
+            _, diff_mask = cv2.threshold(diff, max(16, diff_t), 255, cv2.THRESH_BINARY)
+            _, dark_mask = cv2.threshold(gray_smooth, dark_t, 255, cv2.THRESH_BINARY_INV)
             raw_mask = cv2.bitwise_and(diff_mask, dark_mask)
 
-            # Hybrid MOG2 Adaptive Foreground Reinforcement (helps when lighting shifts or paw is bright)
-            if mog2_subtractor is not None:
-                fg_mog = mog2_subtractor.apply(gray, learningRate=0.001)
-                _, fg_mog = cv2.threshold(fg_mog, 200, 255, cv2.THRESH_BINARY)
-                fg_mog = cv2.bitwise_and(fg_mog, dark_mask)
-                raw_mask = cv2.bitwise_or(raw_mask, fg_mog)
+            # In the upper torso zone ONLY (strictly above the rungs), allow jet-black fur rescue
+            torso_top_zone = max(10, int(fault_y_local) - 20)
+            _, deep_black_upper = cv2.threshold(gray_smooth[:torso_top_zone, :], 55, 255, cv2.THRESH_BINARY_INV)
+            _, min_diff_upper = cv2.threshold(diff[:torso_top_zone, :], 10, 255, cv2.THRESH_BINARY)
+            raw_mask[:torso_top_zone, :] = cv2.bitwise_or(
+                raw_mask[:torso_top_zone, :],
+                cv2.bitwise_and(deep_black_upper, min_diff_upper)
+            )
 
+            # STRICT RUNG PROTECTION: Subtract the ladder mask unconditionally!
             raw_mask = cv2.bitwise_and(raw_mask, inv_ladder_mask)
 
             clean_mask = cv2.morphologyEx(raw_mask, cv2.MORPH_OPEN, self.kernel_small)
             clean_mask = cv2.morphologyEx(clean_mask, cv2.MORPH_CLOSE, self.kernel_horiz)
-            clean_mask = cv2.dilate(clean_mask, self.kernel_small, iterations=1)
             clean_mask = cv2.bitwise_and(clean_mask, inv_ladder_mask)
+
+        # STEP 3: Apply Spatial Gate from Parallel YOLO/Torso Locator
+        if spatial_gate is not None:
+            clean_mask = cv2.bitwise_and(clean_mask, spatial_gate)
 
         contours, _ = cv2.findContours(clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -1513,9 +2308,9 @@ class PerVideoIDTrackerApp:
 
         for c in contours:
             area = cv2.contourArea(c)
-            if 350 < area < max_allowed_area:
+            if 260 < area < max_allowed_area:
                 x_c, y_c, w_c, h_c = cv2.boundingRect(c)
-                if h_c > w_c * 2.5 and y_c < 10:
+                if w_c > h_c * 5.8 or (h_c > w_c * 3.0 and y_c < 6):
                     continue
                 if area > max_area:
                     max_area = area
@@ -1531,19 +2326,40 @@ class PerVideoIDTrackerApp:
         min_x, min_y = x_c, y_c
         max_x, max_y = x_c + w_c, y_c + h_c
 
+        # Attach genuine paw slips directly beneath the torso (excluding flat horizontal plexiglass reflections!)
         for c in contours:
             if c is not best_contour:
                 c_area = cv2.contourArea(c)
-                if 25 < c_area < 1800:
+                if 42 < c_area < 1800:
                     cx, cy, cw, ch = cv2.boundingRect(c)
-                    if (x_c - 30 <= cx <= x_c + w_c + 30) and (y_c - 10 <= cy <= y_c + h_c + 55):
+                    # Reject flat horizontal shelf/edge lines (like the bottom edge in your screenshot!)
+                    if cw > ch * 2.1:
+                        continue
+                    if ch >= 7 and (x_c + 6 <= cx <= x_c + w_c - 6) and (y_c <= cy <= y_c + h_c + 32):
                         cv2.drawContours(final_mouse_mask, [c], -1, 255, -1)
                         min_x = min(min_x, cx)
                         min_y = min(min_y, cy)
                         max_x = max(max_x, cx + cw)
                         max_y = max(max_y, cy + ch)
 
-        merged_bbox = (min_x, min_y, max_x - min_x, max_y - min_y)
+        # Smooth ONLY the upper torso (above the rungs) so the mouse body is solid green,
+        # while the rung/fault zone stays 100% faithful to `inv_ladder_mask`!
+        upper_cut = max(10, int(fault_y_local) - 16)
+        final_mouse_mask[:upper_cut, :] = cv2.morphologyEx(
+            final_mouse_mask[:upper_cut, :], cv2.MORPH_CLOSE, self.kernel_upper_bridge
+        )
+        final_mouse_mask[upper_cut:, :] = cv2.bitwise_and(
+            final_mouse_mask[upper_cut:, :], inv_ladder_mask[upper_cut:, :]
+        )
+
+        # Recompute tight bounding box from the cleaned final_mouse_mask
+        ys, xs = np.where(final_mouse_mask > 0)
+        if len(xs) == 0:
+            return False, None, None
+        min_x, max_x = int(np.min(xs)), int(np.max(xs))
+        min_y, max_y = int(np.min(ys)), int(np.max(ys))
+
+        merged_bbox = (min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
         return True, final_mouse_mask, merged_bbox
 
     def _quick_check_start_gate(self, crop, base_gray, inv_ladder_mask, x1_loc, x2_loc, dark_t, diff_t):
@@ -1551,42 +2367,81 @@ class PerVideoIDTrackerApp:
         sub_base = base_gray[:, x1_loc:x2_loc]
         sub_inv_lad = inv_ladder_mask[:, x1_loc:x2_loc]
 
-        gray = cv2.cvtColor(sub_crop, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(sub_crop, cv2.COLOR_BGR2GRAY) if sub_crop.ndim == 3 else sub_crop
         diff = cv2.subtract(sub_base, gray)
-        _, diff_mask = cv2.threshold(diff, diff_t, 255, cv2.THRESH_BINARY)
-        _, dark_mask = cv2.threshold(gray, dark_t, 255, cv2.THRESH_BINARY_INV)
+        _, diff_mask = cv2.threshold(diff, max(16, diff_t), 255, cv2.THRESH_BINARY)
+        _, dark_mask = cv2.threshold(gray, min(200, dark_t + 10), 255, cv2.THRESH_BINARY_INV)
         diff_mask = cv2.bitwise_and(diff_mask, dark_mask)
         diff_mask = cv2.bitwise_and(diff_mask, sub_inv_lad)
-        return cv2.countNonZero(diff_mask) > 300
+        return cv2.countNonZero(diff_mask) > 240
 
-    def _check_real_dip_below_line(self, final_mouse_mask, fault_y_local):
-        if fault_y_local >= final_mouse_mask.shape[0]:
-            return False, 0, 0, 1.0
+    def _check_real_dip_below_line(self, final_mouse_mask, fault_y_or_curve):
+        """
+        Rejects flat horizontal plexiglass reflections (`sw > sh * 2.0`) and requires
+        a genuine vertical paw dip (`depth >= 6 px`, `area >= 42 px`).
+        """
+        mh, mw = final_mouse_mask.shape[:2]
+
+        if isinstance(fault_y_or_curve, np.ndarray) and fault_y_or_curve.ndim == 1:
+            row_grid = np.arange(mh)[:, None]
+            below_mask = (row_grid >= fault_y_or_curve[None, :mw]).astype(np.uint8) * 255
+            below_zone = cv2.bitwise_and(final_mouse_mask, below_mask)
+            if cv2.countNonZero(below_zone) < 42:
+                return False, 0, 0, 1.0, 0.0
+
+            sub_contours, _ = cv2.findContours(below_zone, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            best_dip = None
+            max_depth = -1
+
+            for sc in sub_contours:
+                if cv2.contourArea(sc) >= 42:
+                    _, _, sw, sh = cv2.boundingRect(sc)
+                    # Reject flat horizontal shelf/edge artifacts!
+                    if sw > sh * 2.1:
+                        continue
+                    pts = sc.reshape(-1, 2)
+                    xs = np.clip(pts[:, 0], 0, mw - 1)
+                    ys = pts[:, 1]
+                    depths = ys - fault_y_or_curve[xs]
+                    max_idx = int(np.argmax(depths))
+                    depth_val = int(depths[max_idx])
+                    if depth_val >= 6 and depth_val > max_depth:
+                        max_depth = depth_val
+                        dip_x_local = int(xs[max_idx])
+                        dip_y_local = int(ys[max_idx])
+                        aspect = float(sw) / max(1.0, float(sh))
+                        best_dip = (True, dip_x_local, dip_y_local, aspect, float(depth_val))
+
+            return best_dip if best_dip is not None else (False, 0, 0, 1.0, 0.0)
+
+        fault_y_local = int(fault_y_or_curve)
+        if fault_y_local >= mh:
+            return False, 0, 0, 1.0, 0.0
 
         below_zone = final_mouse_mask[fault_y_local:, :]
-        if cv2.countNonZero(below_zone) < 28:
-            return False, 0, 0, 1.0
+        if cv2.countNonZero(below_zone) < 42:
+            return False, 0, 0, 1.0, 0.0
 
         sub_contours, _ = cv2.findContours(below_zone, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         best_dip = None
         max_depth = -1
 
         for sc in sub_contours:
-            if cv2.contourArea(sc) >= 28:
+            if cv2.contourArea(sc) >= 42:
+                _, _, sw, sh = cv2.boundingRect(sc)
+                if sw > sh * 2.1:
+                    continue
                 pts = sc.reshape(-1, 2)
-                max_idx = np.argmax(pts[:, 1])
+                max_idx = int(np.argmax(pts[:, 1]))
                 depth_y = int(pts[max_idx, 1])
-                if depth_y > max_depth:
+                if depth_y >= 6 and depth_y > max_depth:
                     max_depth = depth_y
                     dip_x_local = int(pts[max_idx, 0])
                     dip_y_local = fault_y_local + depth_y
-                    _, _, sw, sh = cv2.boundingRect(sc)
                     aspect = float(sw) / max(1.0, float(sh))
-                    best_dip = (True, dip_x_local, dip_y_local, aspect)
+                    best_dip = (True, dip_x_local, dip_y_local, aspect, float(depth_y))
 
-        if best_dip is not None:
-            return best_dip
-        return False, 0, 0, 1.0
+        return best_dip if best_dip is not None else (False, 0, 0, 1.0, 0.0)
 
     def _generate_heatmap_image(
         self, base_frame, trajectory_pts, valid_dips, title_text,
@@ -1613,7 +2468,7 @@ class PerVideoIDTrackerApp:
 
         for d in valid_dips:
             dx, dy = int(d["x"]), int(d["y"])
-            if 0 <= dx < w and 0 <= py < h:
+            if 0 <= dx < w and 0 <= dy < h:
                 cv2.circle(acc, (dx, dy), 26, 3.5, -1)
 
         if np.max(acc) > 0:
@@ -1664,10 +2519,7 @@ class PerVideoIDTrackerApp:
             for pair, s_val in zip(pts_pairs, smoothed):
                 all_segments.append((pair[0], pair[1], s_val))
 
-        if all_positive_speeds:
-            v_ref = max(float(np.percentile(all_positive_speeds, 90)), 15.0)
-        else:
-            v_ref = 100.0
+        v_ref = max(float(np.percentile(all_positive_speeds, 90)), 15.0) if all_positive_speeds else 100.0
 
         for p0, p1, _ in all_segments:
             cv2.line(result, p0, p1, (20, 20, 20), 6, cv2.LINE_AA)
@@ -1680,7 +2532,6 @@ class PerVideoIDTrackerApp:
             else:
                 r_norm = (ratio - 0.5) * 2.0
                 b_c, g_c, r_c = 0, 255, int(255 * (1.0 - r_norm))
-
             cv2.line(result, p0, p1, (b_c, g_c, r_c), 3, cv2.LINE_AA)
 
         for idx, d in enumerate(valid_dips, start=1):
@@ -1716,6 +2567,40 @@ class PerVideoIDTrackerApp:
 
         return result
 
+    # ==========================================================================
+    # EVENT-DRIVEN CALIBRATION WINDOW (0% IDLE CPU / NO OVERHEATING)
+    # ==========================================================================
+    def _find_best_mouse_preview_frame(self, cap, base_gray, rx, ry, rw, rh, total_frames):
+        if total_frames <= 5:
+            return 0
+        sample_indices = np.linspace(int(total_frames * 0.05), int(total_frames * 0.90), 24, dtype=int)
+        best_idx = min(690, total_frames - 1)
+        best_score = -1.0
+
+        body_y1 = int(rh * 0.12)
+        body_y2 = int(rh * 0.65)
+        mid_x1 = int(rw * 0.18)
+        mid_x2 = int(rw * 0.80)
+
+        for idx in sample_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
+            r, f = cap.read()
+            if not r or f is None:
+                continue
+            crop = f[ry:ry + rh, rx:rx + rw]
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+            sub_bg = base_gray[body_y1:body_y2, mid_x1:mid_x2]
+            sub_g = gray[body_y1:body_y2, mid_x1:mid_x2]
+            diff = cv2.subtract(sub_bg, sub_g)
+            mask = (diff > 22) & (sub_g < 115)
+            cnt = int(np.count_nonzero(mask))
+            if 450 < cnt < (sub_g.size * 0.50):
+                score = float(cnt) * float(np.mean(diff[mask]) + 15.0)
+                if score > best_score:
+                    best_score = score
+                    best_idx = int(idx)
+        return best_idx
+
     def setup_and_run_parallel(self):
         first_video = self.video_data[0]["path"]
         cap = open_video_accelerated(first_video, use_hw=self.var_use_gpu.get())
@@ -1726,86 +2611,137 @@ class PerVideoIDTrackerApp:
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         ret, first_frame = cap.read()
-        if not ret:
+        if not ret or first_frame is None:
             cap.release()
             messagebox.showerror("Error", "Could not read first video frame!")
             self.reset_ui()
             return
 
         frame_h, frame_w = first_frame.shape[:2]
+        start_preview_frame = None
 
-        guide_img = first_frame.copy()
-        cv2.putText(
-            guide_img, "1. Select ROI (from mouse back down to dip zone) -> Press ENTER",
-            (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2
-        )
-        roi = cv2.selectROI("1. Select ROI (ENTER = Confirm)", guide_img, showCrosshair=True)
-        close_opencv_windows()
+        if self.var_auto_calib.get():
+            try:
+                calib = self.auto_engine.auto_calibrate_from_video(cap, num_bg_samples=28)
+                rx, ry, rw, rh = calib["rx"], calib["ry"], calib["rw"], calib["rh"]
+                left_gate_x, right_gate_x = calib["left_gate_x"], calib["right_gate_x"]
+                self.calib_dark_thresh = calib["calib_dark_thresh"]
+                self.calib_diff_thresh = calib["calib_diff_thresh"]
+                self.calib_ladder_thresh = calib["calib_ladder_thresh"]
+                self.calib_fault_Ratio = calib["calib_fault_Ratio"]
+                start_preview_frame = calib.get("best_preview_frame")
+            except Exception as e:
+                self.log(f"⚠ Auto-calib fallback ({e})")
+                rx, ry, rw, rh = int(frame_w * 0.05), int(frame_h * 0.35), int(frame_w * 0.90), int(frame_h * 0.30)
+                left_gate_x, right_gate_x = int(rx + rw * 0.10), int(rx + rw * 0.86)
+        else:
+            vp_roi = OpenCVZoomPanViewport(frame_w, frame_h)
+            win_roi = "1. Select ROI (Drag Left=Box, Wheel=Zoom, RightDrag=Pan, ENTER=Confirm)"
+            cv2.namedWindow(win_roi, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(win_roi, min(1150, frame_w), min(750, frame_h))
 
-        rx, ry, rw, rh = [int(v) for v in roi]
-        if rw == 0 or rh == 0:
-            rx, ry, rw, rh = 0, 0, frame_w, frame_h
+            roi_pts = [None, None]
+            drawing_roi = [False]
 
-        gate_clicks = []
-        temp_img = first_frame.copy()
-        cv2.rectangle(temp_img, (rx, ry), (rx + rw, ry + rh), (255, 128, 0), 2)
-        cv2.putText(
-            temp_img, "2. Click LEFT (Start) then RIGHT (Goal) gate lines!",
-            (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2
-        )
+            def roi_mouse_cb(event, x, y, flags, param):
+                if vp_roi.handle_mouse(event, x, y, flags):
+                    return
+                ix, iy = vp_roi.screen_to_image(x, y)
+                if event == cv2.EVENT_LBUTTONDOWN:
+                    drawing_roi[0] = True
+                    roi_pts[0] = (ix, iy)
+                    roi_pts[1] = (ix, iy)
+                    vp_roi.dirty = True
+                elif event == cv2.EVENT_MOUSEMOVE and drawing_roi[0]:
+                    roi_pts[1] = (ix, iy)
+                    vp_roi.dirty = True
+                elif event == cv2.EVENT_LBUTTONUP:
+                    drawing_roi[0] = False
+                    roi_pts[1] = (ix, iy)
+                    vp_roi.dirty = True
 
-        win_gate = "2. Select Start & Goal Gates (2 Clicks)"
+            cv2.setMouseCallback(win_roi, roi_mouse_cb)
+            while True:
+                if not is_window_open(win_roi):
+                    break
+                if vp_roi.dirty:
+                    canvas = first_frame.copy()
+                    cv2.putText(
+                        canvas, "Drag Left Mouse = ROI Box | Mouse Wheel = Zoom | ENTER = Confirm",
+                        (20, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2
+                    )
+                    if roi_pts[0] and roi_pts[1]:
+                        cv2.rectangle(canvas, roi_pts[0], roi_pts[1], (0, 255, 180), 2)
+                    cv2.imshow(win_roi, vp_roi.render(canvas))
+                    vp_roi.dirty = False
 
-        def gate_callback(event, x, y, flags, param):
-            if event == cv2.EVENT_LBUTTONDOWN:
-                gate_clicks.append(x)
-                cv2.line(temp_img, (x, ry), (x, ry + rh), (0, 0, 255), 2)
-                cv2.imshow(win_gate, temp_img)
+                k = cv2.waitKey(50) & 0xFF
+                if k in (13, 32):
+                    break
+                elif k in (ord('r'), ord('R')):
+                    vp_roi.reset()
+                elif k == 27:
+                    close_opencv_windows()
+                    cap.release()
+                    self.reset_ui()
+                    return
+            close_opencv_windows()
 
-        cv2.namedWindow(win_gate, cv2.WINDOW_NORMAL)
-        cv2.imshow(win_gate, temp_img)
-        cv2.setMouseCallback(win_gate, gate_callback)
+            if roi_pts[0] and roi_pts[1]:
+                x1, y1 = roi_pts[0]
+                x2, y2 = roi_pts[1]
+                rx, ry = min(x1, x2), min(y1, y2)
+                rw, rh = abs(x2 - x1), abs(y2 - y1)
+            else:
+                rx, ry, rw, rh = 0, 0, 0, 0
+            if rw < 40 or rh < 30:
+                rx, ry, rw, rh = 0, 0, frame_w, frame_h
 
-        while len(gate_clicks) < 2:
-            if not is_window_open(win_gate):
-                break
-            key = cv2.waitKey(50) & 0xFF
-            if key == 27 or key == ord('q'):
-                break
-        close_opencv_windows()
+            left_gate_x = int(rx + rw * 0.10)
+            right_gate_x = int(rx + rw * 0.86)
 
-        if len(gate_clicks) < 2:
-            cap.release()
-            self.reset_ui()
-            return
-
-        left_gate_x = min(gate_clicks[0], gate_clicks[1])
-        right_gate_x = max(gate_clicks[0], gate_clicks[1])
-
-        base_gray = self._compute_clean_background(cap, rx, ry, rw, rh, num_samples=16)
+        base_gray = self._compute_clean_background(cap, rx, ry, rw, rh, num_samples=28)
         if base_gray is None:
             cap.release()
             self.reset_ui()
             return
 
-        win_calib = "3. Live Calibration (BLUE = Rungs, GREEN = Mouse) - ENTER = Start"
+        if start_preview_frame is None:
+            start_preview_frame = self._find_best_mouse_preview_frame(cap, base_gray, rx, ry, rw, rh, total_frames)
+
+        win_calib = "Calibration Preview (Wheel=Zoom, RightDrag=Pan, LeftClick=Move Gate, ENTER=Start)"
         cv2.namedWindow(win_calib, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(win_calib, min(1150, frame_w), min(780, frame_h + 120))
+        cv2.resizeWindow(win_calib, min(1180, frame_w), min(820, frame_h + 120))
 
-        def nothing(val):
-            pass
+        vp_calib = OpenCVZoomPanViewport(frame_w, frame_h)
 
-        start_preview_frame = 690 if total_frames > 700 else min(30, max(0, total_frames - 1))
+        def on_trackbar_change(val):
+            vp_calib.dirty = True
 
-        cv2.createTrackbar("Frame", win_calib, start_preview_frame, max(1, total_frames - 1), nothing)
-        cv2.createTrackbar("Brightness", win_calib, self.calib_dark_thresh, 220, nothing)
-        cv2.createTrackbar("Motion Diff", win_calib, self.calib_diff_thresh, 100, nothing)
-        cv2.createTrackbar("Rung Mask", win_calib, self.calib_ladder_thresh, 220, nothing)
-        cv2.createTrackbar("Fault Line %", win_calib, self.calib_fault_Ratio, 98, nothing)
+        cv2.createTrackbar("Frame", win_calib, int(start_preview_frame), max(1, total_frames - 1), on_trackbar_change)
+        cv2.createTrackbar("Brightness", win_calib, self.calib_dark_thresh, 220, on_trackbar_change)
+        cv2.createTrackbar("Motion Diff", win_calib, self.calib_diff_thresh, 100, on_trackbar_change)
+        cv2.createTrackbar("Rung Mask", win_calib, self.calib_ladder_thresh, 200, on_trackbar_change)
+        cv2.createTrackbar("Fault Line %", win_calib, self.calib_fault_Ratio, 96, on_trackbar_change)
+
+        def calib_mouse_cb(event, x, y, flags, param):
+            nonlocal left_gate_x, right_gate_x
+            if vp_calib.handle_mouse(event, x, y, flags):
+                return
+            if event == cv2.EVENT_LBUTTONDOWN:
+                ix, _ = vp_calib.screen_to_image(x, y)
+                if abs(ix - left_gate_x) <= abs(ix - right_gate_x):
+                    left_gate_x = int(np.clip(ix, rx + 5, right_gate_x - 40))
+                else:
+                    right_gate_x = int(np.clip(ix, left_gate_x + 40, rx + rw - 5))
+                vp_calib.dirty = True
+
+        cv2.setMouseCallback(win_calib, calib_mouse_cb)
 
         last_track_frame = -1
         current_calib_frame = first_frame.copy()
-        cv2.imshow(win_calib, current_calib_frame)
+        cached_disp = first_frame.copy()
+        last_params = None
 
         while True:
             if not is_window_open(win_calib):
@@ -1815,55 +2751,74 @@ class PerVideoIDTrackerApp:
                 return
 
             f_idx = max(0, cv2.getTrackbarPos("Frame", win_calib))
-            dark_t = max(40, cv2.getTrackbarPos("Brightness", win_calib))
-            diff_t = max(5, cv2.getTrackbarPos("Motion Diff", win_calib))
+            dark_t = max(50, cv2.getTrackbarPos("Brightness", win_calib))
+            diff_t = max(8, cv2.getTrackbarPos("Motion Diff", win_calib))
             ladder_t = max(30, cv2.getTrackbarPos("Rung Mask", win_calib))
-            fault_pct = max(20, cv2.getTrackbarPos("Fault Line %", win_calib))
+            fault_pct = max(25, cv2.getTrackbarPos("Fault Line %", win_calib))
 
-            if f_idx != last_track_frame:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
-                r, f_read = cap.read()
-                if r and f_read is not None:
-                    current_calib_frame = f_read
-                last_track_frame = f_idx
+            curr_params = (f_idx, dark_t, diff_t, ladder_t, fault_pct, left_gate_x, right_gate_x)
 
-            disp = current_calib_frame.copy()
-            crop = disp[ry:ry+rh, rx:rx+rw]
+            if curr_params != last_params:
+                if f_idx != last_track_frame:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
+                    r, f_read = cap.read()
+                    if r and f_read is not None:
+                        current_calib_frame = f_read
+                    last_track_frame = f_idx
 
-            ladder_mask = self._create_ladder_mask(base_gray, ladder_t)
-            inv_ladder_mask = cv2.bitwise_not(ladder_mask)
-            detected, mask, bbox = self._detect_mouse_on_crop(crop, base_gray, inv_ladder_mask, rw, rh, dark_t, diff_t)
+                disp = current_calib_frame.copy()
+                crop = disp[ry:ry + rh, rx:rx + rw]
 
-            overlay = np.zeros_like(crop)
-            overlay[ladder_mask == 255] = (255, 100, 0)
-            if mask is not None:
-                overlay[mask == 255] = (0, 255, 0)
-            disp[ry:ry+rh, rx:rx+rw] = cv2.addWeighted(crop, 0.72, overlay, 0.28, 0)
+                fault_y_local = int(rh * (fault_pct / 100.0))
+                fault_y_global = ry + fault_y_local
 
-            fault_y_local = int(rh * (fault_pct / 100.0))
-            fault_y_global = ry + fault_y_local
-            cv2.line(disp, (rx, fault_y_global), (rx + rw, fault_y_global), (0, 0, 255), 2)
+                ladder_mask = self._create_ladder_mask(base_gray, ladder_t, fault_y_local=fault_y_local)
+                inv_ladder_mask = cv2.bitwise_not(ladder_mask)
+                detected, mask, bbox = self._detect_mouse_on_crop(
+                    crop, base_gray, inv_ladder_mask, rw, rh, dark_t, diff_t, fault_y_local=fault_y_local
+                )
 
-            if detected and bbox is not None and mask is not None:
-                bx, by, bw, bh = bbox
-                cv2.rectangle(disp, (rx + bx, ry + by), (rx + bx + bw, ry + by + bh), (0, 255, 0), 2)
+                overlay = np.zeros_like(crop)
+                overlay[ladder_mask == 255] = (255, 110, 0)
+                if mask is not None:
+                    overlay[mask == 255] = (0, 255, 0)
+                disp[ry:ry + rh, rx:rx + rw] = cv2.addWeighted(crop, 0.65, overlay, 0.35, 0)
 
-                is_dip, dip_x_loc, dip_y_loc, _ = self._check_real_dip_below_line(mask, fault_y_local)
-                if is_dip:
-                    cv2.circle(disp, (rx + dip_x_loc, ry + dip_y_loc), 12, (0, 0, 255), 3)
+                cv2.line(disp, (rx, fault_y_global), (rx + rw, fault_y_global), (0, 0, 255), 2)
 
-            cv2.rectangle(disp, (rx, ry), (rx + rw, ry + rh), (255, 128, 0), 2)
-            cv2.line(disp, (left_gate_x, ry), (left_gate_x, ry + rh), (255, 0, 0), 2)
-            cv2.line(disp, (right_gate_x, ry), (right_gate_x, ry + rh), (255, 0, 0), 2)
+                if detected and bbox is not None and mask is not None:
+                    bx, by, bw, bh = bbox
+                    cv2.rectangle(disp, (rx + bx, ry + by), (rx + bx + bw, ry + by + bh), (0, 255, 0), 2)
 
-            cv2.imshow(win_calib, disp)
-            key = cv2.waitKey(40) & 0xFF
+                    is_dip, dip_x_loc, dip_y_loc, _, _ = self._check_real_dip_below_line(mask, fault_y_local)
+                    if is_dip:
+                        cv2.circle(disp, (rx + dip_x_loc, ry + dip_y_loc), 12, (0, 0, 255), 3)
+
+                cv2.rectangle(disp, (rx, ry), (rx + rw, ry + rh), (255, 140, 0), 2)
+                cv2.line(disp, (left_gate_x, ry), (left_gate_x, ry + rh), (255, 50, 50), 2)
+                cv2.line(disp, (right_gate_x, ry), (right_gate_x, ry + rh), (255, 50, 50), 2)
+                cv2.putText(
+                    disp, "BLUE=Strict Rung Guard | GREEN=YOLO+OpenCV Mouse | RED=Fault Line | ENTER=Start",
+                    (20, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 2
+                )
+
+                cached_disp = disp
+                last_params = curr_params
+                vp_calib.dirty = True
+
+            if vp_calib.dirty:
+                cv2.imshow(win_calib, vp_calib.render(cached_disp))
+                vp_calib.dirty = False
+
+            key = cv2.waitKey(60) & 0xFF
             if key in (13, 32):
                 self.calib_dark_thresh = dark_t
                 self.calib_diff_thresh = diff_t
                 self.calib_ladder_thresh = ladder_t
                 self.calib_fault_Ratio = fault_pct
                 break
+            elif key in (ord('r'), ord('R')):
+                vp_calib.reset()
             elif key == 27:
                 close_opencv_windows()
                 cap.release()
@@ -1890,22 +2845,22 @@ class PerVideoIDTrackerApp:
 
     def _launch_processing_thread(self, rx, ry, rw, rh, left_gate_x, right_gate_x):
         try:
-            dip_cooldown_sec = float(self.spin_cooldown.get())
+            dip_cooldown_sec = float(self.var_cooldown.get())
         except ValueError:
             dip_cooldown_sec = 0.50
 
         try:
-            dip_min_dist_px = int(self.spin_min_dist.get())
+            dip_min_dist_px = int(self.var_min_dist.get())
         except ValueError:
             dip_min_dist_px = 25
 
         try:
-            gate_dist_cm = max(0.1, float(self.spin_gate_cm.get()))
+            gate_dist_cm = max(0.1, float(self.var_gate_cm.get()))
         except ValueError:
             gate_dist_cm = 60.0
 
         try:
-            frame_stride = max(1, int(self.spin_stride.get()))
+            frame_stride = max(1, int(self.var_stride.get()))
         except ValueError:
             frame_stride = 1
 
@@ -1929,7 +2884,7 @@ class PerVideoIDTrackerApp:
         )
 
         try:
-            max_workers = int(self.spin_threads.get())
+            max_workers = int(self.var_threads.get())
         except ValueError:
             max_workers = 4
 
@@ -1939,6 +2894,9 @@ class PerVideoIDTrackerApp:
             daemon=True
         ).start()
 
+    # ==========================================================================
+    # GPU-ACCELERATED PARALLEL VIDEO ANALYSIS (UMat + CACHED LADDER MASK)
+    # ==========================================================================
     def execute_parallel_processing(self, video_data, roi_data, max_workers):
         lock = threading.Lock()
         total_videos = len(video_data)
@@ -1947,11 +2905,18 @@ class PerVideoIDTrackerApp:
          ladder_t, fault_pct, z_active, kin_active,
          dip_cooldown_sec, dip_min_dist_px, gate_dist_cm, px_per_cm, frame_stride, use_gpu, use_kalman) = roi_data
 
-        cv2.ocl.setUseOpenCL(bool(use_gpu and self.gpu_available))
+        gpu_active = bool(use_gpu and self.gpu_available)
+        cv2.ocl.setUseOpenCL(gpu_active)
+
+        try:
+            cpu_cores = os.cpu_count() or 4
+            cv2.setNumThreads(max(1, cpu_cores // max(1, min(max_workers, total_videos))))
+        except Exception:
+            pass
 
         self.log(
             f"\n---> TURBO Engine started ({max_workers} threads, Stride={frame_stride}, "
-            f"Kalman+MOG2={'ON' if use_kalman else 'OFF'}) | Scale: {px_per_cm:.2f} px/cm"
+            f"GPU OpenCL={'ON' if gpu_active else 'OFF'}, YOLO+OpenCV Spatial Gate={'ON' if self.var_yolo_fusion.get() else 'OFF'}) | Scale: {px_per_cm:.2f} px/cm"
         )
 
         def process_single_video(item):
@@ -1984,7 +2949,7 @@ class PerVideoIDTrackerApp:
                 fps = 30.0
 
             ret, first_frame = cap.read()
-            if not ret:
+            if not ret or first_frame is None:
                 cap.release()
                 self.update_row_status(uid, "Error (Empty)")
                 self.increment_progress(total_videos)
@@ -1997,25 +2962,23 @@ class PerVideoIDTrackerApp:
             v_rh = min(rh, fh - v_ry)
 
             faded_bg_template = cv2.addWeighted(first_frame, 0.22, np.full_like(first_frame, 255), 0.78, 0)
-            base_gray = self._compute_clean_background(cap, v_rx, v_ry, v_rw, v_rh, num_samples=16)
+            base_gray = self._compute_clean_background(cap, v_rx, v_ry, v_rw, v_rh, num_samples=28)
             if base_gray is None:
                 cap.release()
                 self.update_row_status(uid, "Error (BG)")
                 self.increment_progress(total_videos)
                 return
 
-            ladder_mask = self._create_ladder_mask(base_gray, ladder_t)
+            ladder_mask = self._create_ladder_mask(base_gray, ladder_t, fault_y_local=fault_y_local)
             inv_ladder_mask = cv2.bitwise_not(ladder_mask)
 
-            mog2_sub = cv2.createBackgroundSubtractorMOG2(history=400, varThreshold=28, detectShadows=True) if use_kalman else None
-            if mog2_sub is not None:
-                mog2_sub.apply(base_gray, learningRate=1.0)
-
             kalman = MouseKalmanTracker() if use_kalman else None
+            rung_pts = self.auto_engine.extract_rung_keypoints(base_gray, max(10, fault_y_local - 12), ladder_t)
+            elastic_tracker = ElasticLadderTracker(base_gray, inv_ladder_mask, rung_pts, fault_y_local) if use_kalman else None
+            last_bbox_local = None
 
-            use_umat_for_roi = bool(use_gpu and self.gpu_available and (v_rw * v_rh >= 90000) and not use_kalman)
-            u_base_gray = cv2.UMat(base_gray) if use_umat_for_roi else None
-            u_inv_ladder = cv2.UMat(inv_ladder_mask) if use_umat_for_roi else None
+            u_base_smooth = cv2.GaussianBlur(cv2.UMat(base_gray), (3, 3), 0) if gpu_active else None
+            u_inv_ladder = cv2.UMat(inv_ladder_mask) if gpu_active else None
 
             stride_pad = 35 * (frame_stride - 1)
             start_x1_loc = max(0, (left_gate_x - 120) - v_rx)
@@ -2075,11 +3038,23 @@ class PerVideoIDTrackerApp:
                         ):
                             continue
 
+                    if elastic_tracker is not None and state == "RUNNING":
+                        crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                        active_base_gray, active_inv_ladder, active_fault_target = elastic_tracker.update(
+                            crop_gray, mouse_bbox_local=last_bbox_local
+                        )
+                    else:
+                        active_base_gray = base_gray
+                        active_inv_ladder = inv_ladder_mask
+                        active_fault_target = fault_y_local
+
                     mouse_detected, final_mouse_mask, bbox = self._detect_mouse_on_crop(
-                        crop, base_gray, inv_ladder_mask, v_rw, v_rh, dark_t, diff_t,
-                        use_umat=use_umat_for_roi, u_base_gray=u_base_gray, u_inv_ladder=u_inv_ladder,
-                        mog2_subtractor=mog2_sub
+                        crop, active_base_gray, active_inv_ladder, v_rw, v_rh, dark_t, diff_t,
+                        fault_y_local=fault_y_local,
+                        use_umat=gpu_active, u_base_smooth=u_base_smooth, u_inv_ladder=u_inv_ladder,
+                        mog2_subtractor=None
                     )
+                    last_bbox_local = bbox if mouse_detected else None
 
                     mouse_x_global = None
                     mouse_y_center_global = None
@@ -2138,7 +3113,9 @@ class PerVideoIDTrackerApp:
                             m_bool = paint_mask == 255
                             current_run_roi[m_bool] = np.minimum(current_run_roi[m_bool], crop[m_bool])
 
-                            is_dip, dip_x_loc, dip_y_loc, dip_aspect = self._check_real_dip_below_line(final_mouse_mask, fault_y_local)
+                            is_dip, dip_x_loc, dip_y_loc, dip_aspect, dip_depth = self._check_real_dip_below_line(
+                                final_mouse_mask, active_fault_target
+                            )
                             if is_dip:
                                 dip_x_glob = v_rx + dip_x_loc
                                 dip_y_glob = v_ry + dip_y_loc
@@ -2152,15 +3129,21 @@ class PerVideoIDTrackerApp:
                                     last_dip_sec = current_sec
                                     last_dip_x = dip_x_glob
 
+                                    body_left_glob = v_rx + bbox[0]
+                                    body_width_px = max(25, bbox[2])
+
                                     dip_events.append({
                                         "x": dip_x_glob,
                                         "y": dip_y_glob,
                                         "sec": current_sec,
                                         "dip_aspect": dip_aspect,
+                                        "dip_depth": dip_depth,
+                                        "body_left_x": body_left_glob,
+                                        "body_width": body_width_px,
                                         "frame_buf": encode_frame_compressed(frame),
                                         "valid": True,
                                         "save_crop": False,
-                                        "dlc_part": "MANCS / ORR",
+                                        "dlc_part": "MANCS (Lábhiba)",
                                         "dlc_code": "PAW"
                                     })
                             else:
@@ -2187,7 +3170,8 @@ class PerVideoIDTrackerApp:
                                     in_freeze_event = False
                             prev_mouse_x = mouse_x_global
 
-                            if mouse_x_global >= right_gate_x:
+                            mouse_front_edge_x = v_rx + bbox[0] + bbox[2]
+                            if mouse_x_global >= right_gate_x or (mouse_front_edge_x >= right_gate_x + 15 and mouse_x_global >= right_gate_x - 35):
                                 if in_freeze_event:
                                     f_dur = current_sec - current_freeze_start_sec
                                     freeze_events.append((
@@ -2222,7 +3206,7 @@ class PerVideoIDTrackerApp:
                                     max_speed_cm_s = max_speed_px_s / px_per_cm
 
                                     full_clean_canvas = np.full_like(first_frame, 255)
-                                    full_clean_canvas[v_ry:v_ry+v_rh, v_rx:v_rx+v_rw] = current_run_roi
+                                    full_clean_canvas[v_ry:v_ry + v_rh, v_rx:v_rx + v_rw] = current_run_roi
 
                                     video_runs_list.append({
                                         "run_num": run_count,
@@ -2274,7 +3258,7 @@ class PerVideoIDTrackerApp:
                 cap.release()
 
             master_white_canvas = np.full_like(first_frame, 255)
-            master_white_canvas[v_ry:v_ry+v_rh, v_rx:v_rx+v_rw] = master_roi_canvas
+            master_white_canvas[v_ry:v_ry + v_rh, v_rx:v_rx + v_rw] = master_roi_canvas
 
             with lock:
                 self.pending_results.append({
@@ -2308,64 +3292,63 @@ class PerVideoIDTrackerApp:
         else:
             self.root.after(0, self.finalize_and_export_all)
 
+    # ==========================================================================
+    # INTERACTIVE DIP INSPECTOR WITH SCROLL-WHEEL ZOOM & DRAG PAN
+    # ==========================================================================
     def open_review_window(self):
         P = self.PALETTE
         rev_win = tk.Toplevel(self.root)
-        rev_win.title(f"{APP_NAME} — Interactive Dip & AI Keypoint Inspector")
-        rev_win.geometry("1180x780")
+        rev_win.title(f"{APP_NAME} — Interactive Dip & Pose Inspector (Scroll = Zoom)")
+        rev_win.geometry("1220x800")
         rev_win.configure(bg=P["bg_main"])
         rev_win.transient(self.root)
         rev_win.grab_set()
         rev_win.lift()
         rev_win.focus_force()
 
-        top_banner = tk.Frame(rev_win, bg=P["bg_card"], padx=18, pady=10, highlightthickness=1, highlightbackground=P["border"])
+        top_banner = tk.Frame(rev_win, bg=P["bg_card"], padx=18, pady=8, highlightthickness=1, highlightbackground=P["border"])
         top_banner.pack(fill="x")
         tk.Label(
             top_banner,
-            text="HOTKEYS:  [↑/↓ or A/D] Navigate  |  [SPACE / X] Toggle Valid  |  [T] Cycle Part (Paw/Nose/Tail)  |  [Z] 2x Zoom Loupe  |  [S] Save Snapshot  |  [ENTER] Finish",
+            text="🖱 GÖRGŐ = Belenagyítás (Zoom)  |  Bal Egérgomb Húzás = Kép Mozgatása  |  [R] = Zoom Alaphelyzet  |  [SPACE] = Érvényes/Törölt  |  [T] = Testrész Váltás  |  [ENTER] = Mentés",
             bg=P["bg_card"], fg=P["emerald"], font=(self.ui_font, 9, "bold")
         ).pack(anchor="w")
 
-        body = tk.Frame(rev_win, bg=P["bg_main"], padx=16, pady=12)
+        body = tk.Frame(rev_win, bg=P["bg_main"], padx=16, pady=10)
         body.pack(fill="both", expand=True)
 
-        left_outer, left_panel, _ = self._create_section_card(body, "Detected Dips & AI Classification", P["emerald"])
+        left_outer, left_panel, _ = self._create_section_card(body, "Detektált Lenyúlások", P["emerald"])
         left_outer.pack(side="left", fill="y", padx=(0, 12))
 
         cols = ("ego", "run", "sec", "part", "valid", "save")
         dip_tree = ttk.Treeview(left_panel, columns=cols, show="headings", height=20, selectmode="browse")
         dip_tree.heading("ego", text="ID")
-        dip_tree.heading("run", text="Run")
-        dip_tree.heading("sec", text="Time (s)")
-        dip_tree.heading("part", text="AI Bodypart [T]")
-        dip_tree.heading("valid", text="Valid?")
-        dip_tree.heading("save", text="Save JPG?")
+        dip_tree.heading("run", text="Futás")
+        dip_tree.heading("sec", text="Idő (s)")
+        dip_tree.heading("part", text="Testrész [T]")
+        dip_tree.heading("valid", text="Érvényes?")
+        dip_tree.heading("save", text="JPG?")
 
-        dip_tree.column("ego", width=60, anchor="center")
-        dip_tree.column("run", width=55, anchor="center")
-        dip_tree.column("sec", width=70, anchor="center")
-        dip_tree.column("part", width=140, anchor="center")
-        dip_tree.column("valid", width=80, anchor="center")
-        dip_tree.column("save", width=80, anchor="center")
+        dip_tree.column("ego", width=55, anchor="center")
+        dip_tree.column("run", width=50, anchor="center")
+        dip_tree.column("sec", width=65, anchor="center")
+        dip_tree.column("part", width=155, anchor="center")
+        dip_tree.column("valid", width=75, anchor="center")
+        dip_tree.column("save", width=60, anchor="center")
         dip_tree.pack(side="left", fill="y")
 
         sb = ttk.Scrollbar(left_panel, orient="vertical", command=dip_tree.yview)
         sb.pack(side="right", fill="y")
         dip_tree.configure(yscrollcommand=sb.set)
 
-        right_outer, right_panel, _ = self._create_section_card(body, "Camera Frame Inspector (with 2x Loupe)", P["wood_amber"])
+        right_outer, right_panel, _ = self._create_section_card(body, "Képkocka Vizsgáló (Görgős Nagyítással)", P["wood_amber"])
         right_outer.pack(side="left", fill="both", expand=True)
 
-        img_label = tk.Label(right_panel, bg=P["bg_main"], text="Select a dip event on the left", fg=P["text_muted"])
-        img_label.pack(fill="both", expand=True, pady=(0, 10))
+        canvas_view = tk.Canvas(right_panel, bg=P["bg_main"], highlightthickness=0, cursor="crosshair")
+        canvas_view.pack(fill="both", expand=True, pady=(0, 8))
 
         ctrl_box = tk.Frame(right_panel, bg=P["bg_card"])
         ctrl_box.pack(fill="x")
-
-        var_valid = tk.BooleanVar(value=True)
-        var_save = tk.BooleanVar(value=False)
-        var_zoom = tk.BooleanVar(value=True)
 
         dip_lookup = {}
         ordered_iids = []
@@ -2384,15 +3367,24 @@ class PerVideoIDTrackerApp:
                             f"#{r['run_num']}",
                             f"{d['sec']:.2f}s",
                             d.get("dlc_part", "MANCS (Lábhiba)"),
-                            "YES" if d["valid"] else "REMOVED",
-                            "Save" if d["save_crop"] else "No"
+                            "IGEN" if d["valid"] else "TÖRÖLVE",
+                            "Igen" if d["save_crop"] else "Nem"
                         )
                     )
 
         current_iid = [None]
         photo_ref = [None]
 
-        def render_preview(iid):
+        view_state = {
+            "zoom": 1.0,
+            "cx": 0.5,
+            "cy": 0.5,
+            "drag_start": None
+        }
+
+        def render_preview(iid=None):
+            if iid is None:
+                iid = current_iid[0]
             if not iid or iid not in dip_lookup:
                 return
             res, r, d = dip_lookup[iid]
@@ -2403,6 +3395,8 @@ class PerVideoIDTrackerApp:
             if raw_frame is None:
                 return
             disp = raw_frame.copy()
+            fh, fw = disp.shape[:2]
+
             cv2.line(disp, (rx, fault_y_glob), (rx + rw, fault_y_glob), (0, 0, 255), 2)
 
             part_str = d.get("dlc_part", "MANCS (Lábhiba)")
@@ -2413,39 +3407,112 @@ class PerVideoIDTrackerApp:
                 status_str = f"VALID ({d['sec']:.2f}s) -> [{part_str}]"
                 if d["save_crop"]:
                     status_str += " [SNAPSHOT]"
-                cv2.putText(disp, status_str, (25, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
+                cv2.putText(disp, status_str, (25, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
             else:
                 cv2.circle(disp, (dx, dy), 18, (128, 128, 128), 2)
                 cv2.putText(
                     disp, f"IGNORED ({d['sec']:.2f}s) [{part_str}]",
-                    (25, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (160, 160, 160), 2
+                    (25, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (160, 160, 160), 2
                 )
 
-            if var_zoom.get():
-                fh, fw = raw_frame.shape[:2]
-                pad = 65
-                zx1, zy1 = max(0, dx - pad), max(0, dy - pad)
-                zx2, zy2 = min(fw, dx + pad), min(fh, dy + pad)
-                crop_z = raw_frame[zy1:zy2, zx1:zx2].copy()
-                if crop_z.size > 0:
-                    local_fy = fault_y_glob - zy1
-                    if 0 <= local_fy < crop_z.shape[0]:
-                        cv2.line(crop_z, (0, local_fy), (crop_z.shape[1], local_fy), (0, 0, 255), 1)
-                    cv2.circle(crop_z, (dx - zx1, dy - zy1), 6, (0, 255, 255), 2)
-                    loupe = cv2.resize(crop_z, (210, 210), interpolation=cv2.INTER_CUBIC)
-                    cv2.rectangle(loupe, (0, 0), (209, 209), (16, 185, 129), 3)
-                    cv2.putText(loupe, "2x LOUPE [Z]", (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (16, 185, 129), 2)
-                    disp[fh - 225:fh - 15, fw - 225:fw - 15] = loupe
+            z = view_state["zoom"]
+            if z > 1.01:
+                vw = max(40.0, fw / z)
+                vh = max(30.0, fh / z)
+                cx_px = view_state["cx"] * fw
+                cy_px = view_state["cy"] * fh
+                x1 = int(np.clip(cx_px - vw / 2.0, 0, max(0, fw - vw)))
+                y1 = int(np.clip(cy_px - vh / 2.0, 0, max(0, fh - vh)))
+                view_state["cx"] = (x1 + vw / 2.0) / float(fw)
+                view_state["cy"] = (y1 + vh / 2.0) / float(fh)
+                disp = disp[y1:y1 + int(vh), x1:x1 + int(vw)]
 
-            h_orig, w_orig = disp.shape[:2]
-            target_w = 590
-            target_h = int(h_orig * (target_w / max(1, w_orig)))
-            resized = cv2.resize(disp, (target_w, target_h))
+            cw = max(480, canvas_view.winfo_width())
+            ch = max(320, canvas_view.winfo_height())
+            scale = min(cw / float(disp.shape[1]), ch / float(disp.shape[0]))
+            tw = max(10, int(disp.shape[1] * scale))
+            th = max(10, int(disp.shape[0] * scale))
+
+            resized = cv2.resize(disp, (tw, th), interpolation=cv2.INTER_LINEAR)
+            cv2.rectangle(resized, (8, th - 32), (240, th - 8), (18, 22, 28), -1)
+            cv2.putText(resized, f"Zoom: {z:.2f}x (Wheel / Drag)", (15, th - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (16, 185, 129), 1)
+
             ok, buf = cv2.imencode(".ppm", resized)
             if ok:
                 photo = tk.PhotoImage(data=buf.tobytes())
                 photo_ref[0] = photo
-                img_label.config(image=photo, text="")
+                canvas_view.delete("all")
+                canvas_view.create_image(cw // 2, ch // 2, image=photo, anchor="center")
+
+        def on_canvas_wheel(event):
+            if getattr(event, "num", None) == 4 or getattr(event, "delta", 0) > 0:
+                factor = 1.25
+            else:
+                factor = 1.0 / 1.25
+
+            old_z = view_state["zoom"]
+            new_z = float(np.clip(old_z * factor, 1.0, 8.0))
+            if abs(new_z - old_z) > 1e-3:
+                cw = max(1, canvas_view.winfo_width())
+                ch = max(1, canvas_view.winfo_height())
+                rel_x = (event.x / float(cw)) - 0.5
+                rel_y = (event.y / float(ch)) - 0.5
+                view_state["cx"] = float(np.clip(view_state["cx"] + rel_x * (1.0 / old_z - 1.0 / new_z), 0.05, 0.95))
+                view_state["cy"] = float(np.clip(view_state["cy"] + rel_y * (1.0 / old_z - 1.0 / new_z), 0.05, 0.95))
+                view_state["zoom"] = new_z
+                render_preview()
+
+        def on_canvas_drag_start(event):
+            view_state["drag_start"] = (event.x, event.y, view_state["cx"], view_state["cy"])
+
+        def on_canvas_drag_move(event):
+            if view_state["drag_start"] is None or view_state["zoom"] <= 1.01:
+                return
+            sx, sy, scx, scy = view_state["drag_start"]
+            cw = max(1, canvas_view.winfo_width())
+            ch = max(1, canvas_view.winfo_height())
+            dx_norm = (event.x - sx) / float(cw * view_state["zoom"])
+            dy_norm = (event.y - sy) / float(ch * view_state["zoom"])
+            view_state["cx"] = float(np.clip(scx - dx_norm, 0.05, 0.95))
+            view_state["cy"] = float(np.clip(scy - dy_norm, 0.05, 0.95))
+            render_preview()
+
+        def reset_zoom(event=None):
+            iid = current_iid[0]
+            if iid and iid in dip_lookup:
+                _, _, d = dip_lookup[iid]
+                raw = decode_frame_compressed(d["frame_buf"])
+                if raw is not None:
+                    fh, fw = raw.shape[:2]
+                    view_state["cx"] = d["x"] / float(fw)
+                    view_state["cy"] = d["y"] / float(fh)
+            else:
+                view_state["cx"], view_state["cy"] = 0.5, 0.5
+            view_state["zoom"] = 1.0
+            render_preview()
+            return "break"
+
+        def zoom_to_dip(factor=2.4):
+            iid = current_iid[0]
+            if iid and iid in dip_lookup:
+                _, _, d = dip_lookup[iid]
+                raw = decode_frame_compressed(d["frame_buf"])
+                if raw is not None:
+                    fh, fw = raw.shape[:2]
+                    view_state["cx"] = d["x"] / float(fw)
+                    view_state["cy"] = d["y"] / float(fh)
+            view_state["zoom"] = factor if view_state["zoom"] < 1.5 else 1.0
+            render_preview()
+            return "break"
+
+        canvas_view.bind("<MouseWheel>", on_canvas_wheel)
+        canvas_view.bind("<Button-4>", on_canvas_wheel)
+        canvas_view.bind("<Button-5>", on_canvas_wheel)
+        canvas_view.bind("<ButtonPress-1>", on_canvas_drag_start)
+        canvas_view.bind("<B1-Motion>", on_canvas_drag_move)
+        canvas_view.bind("<ButtonPress-3>", on_canvas_drag_start)
+        canvas_view.bind("<B3-Motion>", on_canvas_drag_move)
+        canvas_view.bind("<Configure>", lambda e: render_preview())
 
         def update_tree_row(iid):
             res, r, d = dip_lookup[iid]
@@ -2456,8 +3523,8 @@ class PerVideoIDTrackerApp:
                     f"#{r['run_num']}",
                     f"{d['sec']:.2f}s",
                     d.get("dlc_part", "MANCS (Lábhiba)"),
-                    "YES" if d["valid"] else "REMOVED",
-                    "Save" if d["save_crop"] else "No"
+                    "IGEN" if d["valid"] else "TÖRÖLVE",
+                    "Igen" if d["save_crop"] else "Nem"
                 )
             )
 
@@ -2468,22 +3535,11 @@ class PerVideoIDTrackerApp:
             iid = sel[0]
             current_iid[0] = iid
             _, _, d = dip_lookup[iid]
-            var_valid.set(d["valid"])
-            var_save.set(d["save_crop"])
-            render_preview(iid)
-
-        def on_toggle_checkboxes():
-            iid = current_iid[0]
-            if not iid:
-                return
-            _, _, d = dip_lookup[iid]
-            d["valid"] = var_valid.get()
-            if not d["valid"]:
-                var_save.set(False)
-                d["save_crop"] = False
-            else:
-                d["save_crop"] = var_save.get()
-            update_tree_row(iid)
+            raw = decode_frame_compressed(d["frame_buf"])
+            if raw is not None:
+                fh, fw = raw.shape[:2]
+                view_state["cx"] = d["x"] / float(fw)
+                view_state["cy"] = d["y"] / float(fh)
             render_preview(iid)
 
         def step_selection(delta):
@@ -2509,8 +3565,6 @@ class PerVideoIDTrackerApp:
             d["valid"] = not d["valid"]
             if not d["valid"]:
                 d["save_crop"] = False
-            var_valid.set(d["valid"])
-            var_save.set(d["save_crop"])
             update_tree_row(iid)
             render_preview(iid)
             return "break"
@@ -2520,16 +3574,19 @@ class PerVideoIDTrackerApp:
             if not iid:
                 return
             _, _, d = dip_lookup[iid]
-            code = d.get("dlc_code", "PAW")
-            if code == "PAW":
+            part = d.get("dlc_part", "MELLSŐ LÁB (Lábhiba)")
+            if "MELLSŐ" in part or part == "MANCS (Lábhiba)":
+                d["dlc_code"] = "PAW"
+                d["dlc_part"] = "HÁTSÓ LÁB (Lábhiba)"
+            elif "HÁTSÓ LÁB" in part:
                 d["dlc_code"] = "NOSE"
                 d["dlc_part"] = "ORR (Exploráció)"
-            elif code == "NOSE":
+            elif "ORR" in part:
                 d["dlc_code"] = "HIND_TAIL"
-                d["dlc_part"] = "HÁTSÓ LÁB / FAROK"
+                d["dlc_part"] = "FAROK (Billenés)"
             else:
                 d["dlc_code"] = "PAW"
-                d["dlc_part"] = "MANCS (Lábhiba)"
+                d["dlc_part"] = "MELLSŐ LÁB (Lábhiba)"
             update_tree_row(iid)
             render_preview(iid)
             return "break"
@@ -2542,34 +3599,28 @@ class PerVideoIDTrackerApp:
             d["save_crop"] = not d["save_crop"]
             if d["save_crop"]:
                 d["valid"] = True
-            var_valid.set(d["valid"])
-            var_save.set(d["save_crop"])
             update_tree_row(iid)
             render_preview(iid)
             return "break"
 
-        def hotkey_toggle_zoom(event=None):
-            var_zoom.set(not var_zoom.get())
-            render_preview(current_iid[0])
-            return "break"
-
         quick_btn_row = tk.Frame(ctrl_box, bg=P["bg_panel"], pady=6, padx=6)
-        quick_btn_row.pack(fill="x", pady=(6, 0))
+        quick_btn_row.pack(fill="x")
 
-        ttk.Button(quick_btn_row, text="◀ Prev [↑/A]", command=lambda: step_selection(-1), style="Ghost.TButton").pack(side="left", padx=(0, 6))
-        ttk.Button(quick_btn_row, text="Next [↓/D] ▶", command=lambda: step_selection(1), style="Ghost.TButton").pack(side="left", padx=(0, 10))
-        ttk.Button(quick_btn_row, text="⭕ Valid [Space]", command=hotkey_toggle_valid, style="SoftRed.TButton").pack(side="left", padx=(0, 6))
-        ttk.Button(quick_btn_row, text="🐾 Part [T]", command=hotkey_cycle_part, style="Teal.TButton").pack(side="left", padx=(0, 6))
-        ttk.Button(quick_btn_row, text="🔍 2x Loupe [Z]", command=hotkey_toggle_zoom, style="Ghost.TButton").pack(side="left", padx=(0, 6))
-        ttk.Button(quick_btn_row, text="💾 Save JPG [S]", command=hotkey_toggle_save, style="Primary.TButton").pack(side="left")
+        ttk.Button(quick_btn_row, text="◀ Előző [↑/A]", command=lambda: step_selection(-1), style="Ghost.TButton").pack(side="left", padx=(0, 6))
+        ttk.Button(quick_btn_row, text="Következő [↓/D] ▶", command=lambda: step_selection(1), style="Ghost.TButton").pack(side="left", padx=(0, 10))
+        ttk.Button(quick_btn_row, text="⭕ Érvényes [Space]", command=hotkey_toggle_valid, style="SoftRed.TButton").pack(side="left", padx=(0, 6))
+        ttk.Button(quick_btn_row, text="🐾 Testrész [T]", command=hotkey_cycle_part, style="Teal.TButton").pack(side="left", padx=(0, 6))
+        ttk.Button(quick_btn_row, text="🔍 Fókusz Zoom [Z]", command=lambda: zoom_to_dip(2.5), style="Ghost.TButton").pack(side="left", padx=(0, 6))
+        ttk.Button(quick_btn_row, text="↺ 1x [R]", command=reset_zoom, style="Ghost.TButton").pack(side="left", padx=(0, 6))
+        ttk.Button(quick_btn_row, text="💾 Képmentés [S]", command=hotkey_toggle_save, style="Primary.TButton").pack(side="left")
 
         dip_tree.bind("<<TreeviewSelect>>", on_select)
         if ordered_iids:
             dip_tree.selection_set(ordered_iids[0])
             dip_tree.focus(ordered_iids[0])
-            on_select()
+            rev_win.after(80, on_select)
 
-        bottom_bar = tk.Frame(rev_win, bg=P["bg_main"], padx=16, pady=10)
+        bottom_bar = tk.Frame(rev_win, bg=P["bg_main"], padx=16, pady=8)
         bottom_bar.pack(fill="x")
 
         def confirm_and_close(event=None):
@@ -2592,24 +3643,28 @@ class PerVideoIDTrackerApp:
             rev_win.bind(k, hotkey_toggle_valid)
         for k in ("<t>", "<T>"):
             rev_win.bind(k, hotkey_cycle_part)
-        for k in ("<s>", "<S>", "<m>", "<M>"):
+        for k in ("<s>", "<S>"):
             rev_win.bind(k, hotkey_toggle_save)
         for k in ("<z>", "<Z>"):
-            rev_win.bind(k, hotkey_toggle_zoom)
+            rev_win.bind(k, lambda e: zoom_to_dip(2.5))
+        for k in ("<r>", "<R>"):
+            rev_win.bind(k, reset_zoom)
         rev_win.bind("<Return>", confirm_and_close)
 
         ttk.Button(
-            bottom_bar, text="✔  Confirm Review & Export All Results [ENTER]",
+            bottom_bar, text="✔  Ellenőrzés Kész & Eredmények Exportálása [ENTER]",
             command=confirm_and_close, style="Emerald.TButton"
         ).pack(side="right")
 
         rev_win.protocol("WM_DELETE_WINDOW", confirm_and_close)
 
+    # ==========================================================================
+    # CSV & HEATMAP EXPORT
+    # ==========================================================================
     def finalize_and_export_all(self):
         if not self.pending_results:
             self.reset_ui()
             return
-
         self.log("\n💾 Exporting CSV tables and velocity heatmaps in background...")
         threading.Thread(target=self._export_worker, daemon=True).start()
 
@@ -2705,9 +3760,7 @@ class PerVideoIDTrackerApp:
                                     f"ID #{animal_id} | Run #{run_count} | Dip #{idx_pt} ({d['sec']:.2f}s) [{part_lbl}]",
                                     (25, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2
                                 )
-                                snap_path = os.path.join(
-                                    output_dir, f"egyed_{safe_id}_futas_{run_count}_lenyulas_{idx_pt}.jpg"
-                                )
+                                snap_path = os.path.join(output_dir, f"egyed_{safe_id}_futas_{run_count}_lenyulas_{idx_pt}.jpg")
                                 save_image_unicode(snap_path, snap)
 
                     zone_dips = [0, 0, 0]
@@ -2768,10 +3821,8 @@ class PerVideoIDTrackerApp:
                         cv2.putText(canvas_img, info_line1, (25, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 0, 220), 2)
                         cv2.putText(canvas_img, info_line2, (25, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.54, (180, 60, 0), 2)
 
-                    img_clean_path = os.path.join(output_dir, f"egyed_{safe_id}_futas_{run_count}_tiszta_{transit_time:.2f}s.jpg")
-                    img_faded_path = os.path.join(output_dir, f"egyed_{safe_id}_futas_{run_count}_halvany_{transit_time:.2f}s.jpg")
-                    save_image_unicode(img_clean_path, clean_canvas)
-                    save_image_unicode(img_faded_path, run_with_faded_ladder)
+                    save_image_unicode(os.path.join(output_dir, f"egyed_{safe_id}_futas_{run_count}_tiszta_{transit_time:.2f}s.jpg"), clean_canvas)
+                    save_image_unicode(os.path.join(output_dir, f"egyed_{safe_id}_futas_{run_count}_halvany_{transit_time:.2f}s.jpg"), run_with_faded_ladder)
 
                     if kin_active:
                         hm_title = f"ID #{animal_id} | Run #{run_count} | Dist: {r['path_len_cm']:.1f}cm | Avg: {r['avg_speed_cm_s']:.1f}cm/s"
@@ -2867,8 +3918,7 @@ class PerVideoIDTrackerApp:
     def reset_ui(self):
         self.is_running = False
         self.btn_start.config(state="normal")
-        if self.saved_geometry is not None:
-            self.btn_quick_start.config(state="normal")
+        self.btn_quick_start.config(state="normal")
         self.btn_stop.config(state="disabled")
         self._refresh_kpi_cards()
 
