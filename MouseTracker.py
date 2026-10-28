@@ -25,15 +25,17 @@ APP_VERSION = "3.5"
 # RESOURCE PATH & NATIVE OS BRANDING (macOS Dock/Menu & Windows Taskbar)
 # ==============================================================================
 def get_resource_path(relative_path):
-    """Finds bundled resources (icon.ico, icon.icns) both in dev and PyInstaller builds."""
+    """Finds bundled resources (icon.ico, icon.icns, .pt models) in dev, cwd, and PyInstaller builds."""
+    search_dirs = []
     if hasattr(sys, "_MEIPASS"):
-        base_path = sys._MEIPASS
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    candidate = os.path.join(base_path, relative_path)
-    if os.path.exists(candidate):
-        return candidate
-    return os.path.join(os.getcwd(), relative_path)
+        search_dirs.append(sys._MEIPASS)
+    search_dirs.append(os.path.dirname(os.path.abspath(__file__)))
+    search_dirs.append(os.getcwd())
+    for base_path in search_dirs:
+        candidate = os.path.join(base_path, relative_path)
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
 
 
 def configure_native_os_identity():
@@ -111,10 +113,12 @@ def setup_safe_working_directory(folder_name="MouseAnalyzer_Eredmenyek"):
         docs_dir = os.path.expanduser("~")
     safe_dir = os.path.join(docs_dir, folder_name)
     os.makedirs(safe_dir, exist_ok=True)
-    try:
-        os.chdir(safe_dir)
-    except Exception:
-        pass
+    # Only change cwd when running inside a frozen/read-only bundle
+    if hasattr(sys, "_MEIPASS") or not os.access(os.getcwd(), os.W_OK):
+        try:
+            os.chdir(safe_dir)
+        except Exception:
+            pass
     return safe_dir
 
 
@@ -157,7 +161,7 @@ TRANSLATIONS = {
         "sec2_title": "2. Futtatás és Vezérlés",
         "chk_rev": "🔍 Lenyúlás-ellenőrző ablak",
         "chk_auto_calib": "🤖 Automatikus létra- és egér-kalibráció",
-        "chk_yolo_fusion": "⚡ Párhuzamos YOLO + OpenCV Maszk Fúzió",
+        "chk_yolo_fusion": "⚡ Párhuzamos YOLO + Anatómiai OpenCV Fúzió",
         "chk_zones": "Pálya szektorokra bontása (Start / Közép / Cél)",
         "chk_kin": "Kinematika (cm/s) + Sebesség-Heatmapek",
         "chk_gpu": "🚀 GPU (OpenCL UMat + HW Dekóder) & Aszinkron Olvasó",
@@ -192,7 +196,7 @@ TRANSLATIONS = {
         "tt_remove_vid": "A kijelölt videó eltávolítása a listából.",
         "tt_clear_vid": "A teljes videólista ürítése.",
         "tt_auto_calib": "Automatikusan megkeresi a létrát, a kapukat és az egeret tartalmazó képkockát.",
-        "tt_yolo": "Párhuzamosan futtatja a YOLO detektort és az OpenCV maszkot, így kizárja a létrafokok téves bezöldülését.",
+        "tt_yolo": "A YOLO háttérben fut; az OpenCV gerincbecslése csípő- és vállkereső zónákat jelöl ki a lábhibákhoz.",
         "tt_rev": "A futás végén nagyítható ellenőrző ablakot nyit meg a lenyúlások átnézéséhez.",
         "tt_gatecm": "A Start és Cél kapu közötti valós távolság centiméterben.",
         "tt_settings": "További beállítások: szálak száma, lépésköz, refrakter idő, GPU és CSV formátum.",
@@ -228,7 +232,7 @@ TRANSLATIONS = {
         "sec2_title": "2. Execution & Controls",
         "chk_rev": "🔍 Interactive Dip Inspector",
         "chk_auto_calib": "🤖 Auto-detect ladder & mouse",
-        "chk_yolo_fusion": "⚡ Parallel YOLO + OpenCV Mask Fusion",
+        "chk_yolo_fusion": "⚡ Parallel YOLO + Anatomical OpenCV Fusion",
         "chk_zones": "Split track into sectors (Start / Mid / Goal)",
         "chk_kin": "Kinematics (cm/s) + Velocity Heatmaps",
         "chk_gpu": "🚀 GPU (OpenCL UMat + HW Decoder) & Async Reader",
@@ -263,7 +267,7 @@ TRANSLATIONS = {
         "tt_remove_vid": "Remove the selected video from the list.",
         "tt_clear_vid": "Clear all videos from the list.",
         "tt_auto_calib": "Automatically detects ladder ROI, gates, and best mouse preview frame.",
-        "tt_yolo": "Runs YOLO detection in parallel with OpenCV to spatially gate the mouse and prevent false rung masks.",
+        "tt_yolo": "Runs YOLO in the background while OpenCV estimates the trunk axis and gates paw-dip searches to hip and shoulder zones.",
         "tt_rev": "Opens a zoomable inspector window after analysis to review detected foot faults.",
         "tt_gatecm": "Physical distance in centimeters between Start and Goal gates.",
         "tt_settings": "Configure threads, frame stride, refractory period, GPU, and CSV format.",
@@ -425,7 +429,10 @@ class OpenCVZoomPanViewport:
         y1 = float(np.clip(self.cy - vh / 2.0, 0.0, max(0.0, self.img_h - vh)))
         self.cx = x1 + vw / 2.0
         self.cy = y1 + vh / 2.0
-        return int(round(x1)), int(round(y1)), int(round(vw)), int(round(vh))
+        ix1, iy1 = int(round(x1)), int(round(y1))
+        ivw = max(1, min(self.img_w - ix1, int(round(vw))))
+        ivh = max(1, min(self.img_h - iy1, int(round(vh))))
+        return ix1, iy1, ivw, ivh
 
     def screen_to_image(self, sx, sy):
         vx, vy, vw, vh = self.get_view_rect()
@@ -657,6 +664,21 @@ class ParallelYoloOpenCVEngine:
         self.yolo_model = None
         self.yolo_lock = threading.Lock()
         self.device = "cpu"
+        self.yolo_executor = None
+        self.stream_lock = threading.Lock()
+        self.stream_states = {}
+        self._yolo_error_logged = False
+        self.k_seed_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 9))
+        self.k_open_3 = np.ones((3, 3), np.uint8)
+        self.k_close_core = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 5))
+        self.k_yolo_dilate = np.ones((11, 11), np.uint8)
+        self.k_grad_3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        self._ignored_coco_classes = {
+            "person", "bicycle", "car", "motorcycle", "bus", "truck", "traffic light",
+            "bench", "chair", "couch", "potted plant", "bed", "dining table", "toilet",
+            "tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave",
+            "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "bottle", "cup"
+        }
         self._init_yolo()
 
     def _init_yolo(self):
@@ -677,64 +699,247 @@ class ParallelYoloOpenCVEngine:
                 p = get_resource_path(candidate)
                 if os.path.exists(p):
                     self.yolo_model = YOLO(p)
+                    self.yolo_executor = ThreadPoolExecutor(
+                        max_workers=1, thread_name_prefix="mouse-yolo"
+                    )
                     self.log(f"⚡ [Hybrid YOLO+OpenCV] Loaded '{candidate}' on {self.device.upper()}")
                     return
         except Exception:
             self.yolo_model = None
 
-    def locate_animal_roi_and_mask(self, crop_bgr, gray_smooth, base_smooth, inv_ladder_mask, fault_y_local, dark_t, diff_t):
+    def _predict_yolo(self, crop_bgr, rw, rh):
+        with self.yolo_lock:
+            results = self.yolo_model.predict(
+                crop_bgr, conf=0.22, verbose=False, device=self.device, imgsz=320
+            )
+        if not results:
+            return None, None
+
+        result = results[0]
+        yolo_bbox = None
+        yolo_seg_mask = None
+        if result.boxes is not None and len(result.boxes) > 0:
+            boxes = result.boxes.xyxy.cpu().numpy()
+            cls_ids = result.boxes.cls.cpu().numpy().astype(int) if result.boxes.cls is not None else None
+            names = getattr(self.yolo_model, "names", {}) or {}
+            is_generic_coco = len(names) > 15
+
+            best_i = -1
+            best_area = -1.0
+            for i, box in enumerate(boxes):
+                x1, y1, x2, y2 = [int(v) for v in box]
+                bw, bh = x2 - x1, y2 - y1
+                if bw < 16 or bh < 8 or bw >= rw * 0.78 or bh >= rh * 0.92:
+                    continue
+                # Reject detections centered near the bottom table surface
+                if (y1 + bh * 0.5) > rh * 0.80:
+                    continue
+                if is_generic_coco and cls_ids is not None and i < len(cls_ids):
+                    cname = str(names.get(int(cls_ids[i]), "")).lower()
+                    # Note: in COCO, 'mouse' (id 64) is a computer mouse, but sometimes rodents trigger cat/dog/bird/bear/sheep/mouse;
+                    # we only block furniture, tables, screens, people, and bottles.
+                    if cname in self._ignored_coco_classes and cname != "mouse":
+                        continue
+                area = float(bw * bh)
+                if area > best_area:
+                    best_area = area
+                    best_i = i
+
+            if best_i >= 0:
+                x1, y1, x2, y2 = [int(value) for value in boxes[best_i]]
+                yolo_bbox = (x1, y1, x2 - x1, y2 - y1)
+                if result.masks is not None and len(result.masks.data) > best_i:
+                    mask_data = result.masks.data[best_i].cpu().numpy()
+                    yolo_seg_mask = (cv2.resize(mask_data, (rw, rh)) > 0.35).astype(np.uint8) * 255
+        return yolo_bbox, yolo_seg_mask
+
+    def _get_yolo_result(self, crop_bgr, rw, rh, stream_id, frame_idx, max_age):
+        if self.yolo_model is None:
+            return None, None, max_age + 1
+
+        if stream_id is None or frame_idx is None or self.yolo_executor is None:
+            try:
+                yolo_bbox, yolo_seg_mask = self._predict_yolo(crop_bgr, rw, rh)
+                return yolo_bbox, yolo_seg_mask, 0
+            except Exception as exc:
+                if not self._yolo_error_logged:
+                    self.log(f"⚠ YOLO inference failed; continuing with OpenCV: {exc}")
+                    self._yolo_error_logged = True
+                return None, None, max_age + 1
+
+        with self.stream_lock:
+            state = self.stream_states.setdefault(
+                stream_id, {"future": None, "result": None, "frame_idx": -1}
+            )
+            future = state["future"]
+            if future is not None and future.done():
+                try:
+                    state["result"] = future.result()
+                    state["frame_idx"] = state.pop("pending_frame_idx")
+                    self._yolo_error_logged = False
+                except Exception as exc:
+                    if not self._yolo_error_logged:
+                        self.log(f"⚠ YOLO inference failed; continuing with OpenCV: {exc}")
+                        self._yolo_error_logged = True
+                state["future"] = None
+
+            if state["future"] is None:
+                state["pending_frame_idx"] = frame_idx
+                state["future"] = self.yolo_executor.submit(
+                    self._predict_yolo, crop_bgr.copy(), rw, rh
+                )
+
+            result_age = frame_idx - state["frame_idx"]
+            if result_age <= max_age:
+                yolo_bbox, yolo_seg_mask = (
+                    state["result"] if state["result"] is not None else (None, None)
+                )
+                return yolo_bbox, yolo_seg_mask, result_age
+            return None, None, result_age
+
+    def reset_stream(self, stream_id):
+        with self.stream_lock:
+            self.stream_states.pop(stream_id, None)
+
+    def locate_animal_roi_and_mask(
+        self, crop_bgr, gray_smooth, base_smooth, inv_ladder_mask, fault_y_local,
+        dark_t, diff_t, stream_id=None, frame_idx=None, ai_max_age=3, previous_bbox=None
+    ):
         """
-        Finds the exact horizontal & vertical location of the rodent torso first,
-        then builds a spatial gating mask so ONLY pixels belonging to the animal's
-        location can be included in the final OpenCV mask.
+        Finds the exact horizontal & vertical location of the rodent torso first
+        using Hysteresis Background-Difference + Static Imperfection Suppression +
+        Geodesic Reconstruction + Parallel YOLO, then builds a spatial gating mask
+        so ONLY pixels belonging to the animal's true location can be included in the
+        final OpenCV mask (ignoring table imperfections, static dark walls, and shadows).
         """
         rh, rw = gray_smooth.shape[:2]
 
-        # 1. Fast OpenCV Torso-Core Locator (looks strictly above the ladder rungs)
-        torso_bottom = max(15, int(fault_y_local) - 14)
+        # 1. Hysteresis OpenCV Torso-Core Locator (looks strictly above the ladder rungs)
+        torso_bottom = max(15, int(fault_y_local) - 10)
         torso_gray = gray_smooth[:torso_bottom, :]
         torso_base = base_smooth[:torso_bottom, :]
         torso_diff = cv2.subtract(torso_base, torso_gray)
+        torso_absdiff = cv2.absdiff(torso_base, torso_gray)
 
-        # True rodent fur in the upper corridor is both darker than background AND low-luminance
-        core_mask = ((torso_diff >= max(16, diff_t)) & (torso_gray <= dark_t)).astype(np.uint8) * 255
-        # Also include jet-black fur (< 55) that is at least 10 levels darker than background
-        jet_black = ((torso_gray < 55) & (torso_diff >= 10)).astype(np.uint8) * 255
-        core_mask = cv2.bitwise_or(core_mask, jet_black)
-        core_mask = cv2.morphologyEx(core_mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+        # Detect static background imperfections (dark knots/scratches/bolts or sharp static edges)
+        bg_grad = cv2.morphologyEx(torso_base, cv2.MORPH_GRADIENT, self.k_grad_3)
+        static_imperfection = (torso_base <= min(215, dark_t + 8)) | (bg_grad >= 16)
+        static_imperfection = cv2.dilate(
+            static_imperfection.astype(np.uint8) * 255, self.k_open_3, iterations=1
+        ) > 0
+
+        seed_diff_t = max(11, int(diff_t * 0.78))
+        low_diff_t = max(6, int(diff_t * 0.38))
+        blemish_diff_t = max(seed_diff_t + 14, int(diff_t * 1.55))
+
+        # High-confidence foreground seeds: clearly changed from background AND dark,
+        # requiring much stronger difference on pre-existing background imperfections!
+        valid_seed_bool = (
+            ((torso_diff >= seed_diff_t) & (torso_gray <= min(225, dark_t + 14)) & (~static_imperfection))
+            | ((torso_diff >= blemish_diff_t) & (torso_gray <= dark_t))
+            | ((torso_absdiff >= max(22, int(diff_t * 1.30))) & (torso_gray <= dark_t) & (~static_imperfection))
+        )
+        seed_mask = valid_seed_bool.astype(np.uint8) * 255
+
+        # If we have a recent tracked bounding box, allow stationary/freezing rodent pixels inside it
+        # (excluding pre-existing static background imperfections so table spots never lock!)
+        if previous_bbox is not None:
+            px, py, pw, ph = previous_bbox
+            px1 = max(0, int(px - 16))
+            px2 = min(rw, int(px + pw + 16))
+            py1 = max(0, int(py - 10))
+            py2 = min(torso_bottom, int(py + ph + 10))
+            if px2 > px1 and py2 > py1:
+                stationary_rescue = (
+                    (torso_diff[py1:py2, px1:px2] >= low_diff_t)
+                    & (torso_gray[py1:py2, px1:px2] <= dark_t)
+                    & (~static_imperfection[py1:py2, px1:px2])
+                ).astype(np.uint8) * 255
+                seed_mask[py1:py2, px1:px2] = cv2.bitwise_or(
+                    seed_mask[py1:py2, px1:px2], stationary_rescue
+                )
+
+        # Candidate body support mask: dark pixels that ALSO differ from the clean background
+        # (requires stronger difference on static background blemishes/edges)
+        support_bool = (
+            (torso_gray <= min(228, dark_t + 8))
+            & (
+                ((torso_diff >= low_diff_t) & (~static_imperfection))
+                | (torso_diff >= blemish_diff_t)
+            )
+        )
+        support_mask = support_bool.astype(np.uint8) * 255
+        if inv_ladder_mask is not None:
+            support_mask = cv2.bitwise_and(support_mask, inv_ladder_mask[:torso_bottom, :])
+
+        # Geodesic morphological reconstruction: keep only support components connected to a valid seed
+        seed_dilated = cv2.dilate(seed_mask, self.k_seed_dilate, iterations=2)
+        core_mask = cv2.bitwise_and(support_mask, seed_dilated)
+        core_mask = cv2.morphologyEx(core_mask, cv2.MORPH_OPEN, self.k_open_3)
+        core_mask = cv2.morphologyEx(core_mask, cv2.MORPH_CLOSE, self.k_close_core)
 
         # 2. Optional Parallel YOLO Box / Segmentation Refinement
-        yolo_bbox = None
-        yolo_seg_mask = None
-        if self.yolo_model is not None:
-            try:
-                with self.yolo_lock:
-                    results = self.yolo_model.predict(
-                        crop_bgr, conf=0.22, verbose=False, device=self.device, imgsz=320
-                    )
-                if results and len(results) > 0:
-                    r0 = results[0]
-                    if r0.boxes is not None and len(r0.boxes) > 0:
-                        boxes = r0.boxes.xyxy.cpu().numpy()
-                        areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-                        best_i = int(np.argmax(areas))
-                        x1, y1, x2, y2 = [int(v) for v in boxes[best_i]]
-                        if (x2 - x1) < rw * 0.85:
-                            yolo_bbox = (x1, y1, x2 - x1, y2 - y1)
-                        if r0.masks is not None and len(r0.masks.data) > best_i:
-                            m_raw = r0.masks.data[best_i].cpu().numpy()
-                            yolo_seg_mask = (cv2.resize(m_raw, (rw, rh)) > 0.35).astype(np.uint8) * 255
-            except Exception:
-                pass
+        yolo_bbox, yolo_seg_mask, yolo_age = self._get_yolo_result(
+            crop_bgr, rw, rh, stream_id, frame_idx, max(3, int(ai_max_age))
+        )
+        if yolo_age > max(3, int(ai_max_age)):
+            yolo_bbox = None
+            yolo_seg_mask = None
 
-        # 3. Find dominant torso cluster from core_mask
+        # 3. Find dominant torso cluster from core_mask within the ladder walking corridor
         contours, _ = cv2.findContours(core_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         best_c = None
-        max_a = 0
+        max_a = float("-inf")
+        min_corridor_bottom = max(10, int(torso_bottom * 0.35))
+        max_valid_torso_top = max(12, int(fault_y_local) - max(50, int(rh * 0.18)))
+        min_torso_h = max(28, int(rh * 0.105))
         for c in contours:
             a = cv2.contourArea(c)
-            if a > 220 and a > max_a:
-                max_a = a
+            if a <= 300:
+                continue
+            x_c, y_c, w_c, h_c = cv2.boundingRect(c)
+            aspect_ratio = w_c / max(1.0, float(h_c))
+            fill_ratio = a / max(1.0, float(w_c * h_c))
+            # Reject flat rung-edge slivers (y_c >= max_valid_torso_top or h_c < min_torso_h) and vertical wall markers
+            if (
+                w_c < 24
+                or h_c < min_torso_h
+                or y_c >= max_valid_torso_top
+                or aspect_ratio < 0.45
+                or aspect_ratio > 9.5
+                or fill_ratio < 0.14
+            ):
+                continue
+            # Reject isolated ceiling/wall artifacts that do not reach the walking corridor above the rungs
+            if (y_c + h_c) < min_corridor_bottom:
+                continue
+
+            roi_diff = torso_diff[y_c:y_c + h_c, x_c:x_c + w_c]
+            mean_diff = float(np.mean(roi_diff)) if roi_diff.size > 0 else 0.0
+            p80_diff = float(np.percentile(roi_diff, 80)) if roi_diff.size > 0 else 0.0
+            if (mean_diff < max(10.0, diff_t * 0.48) or p80_diff < max(22.0, diff_t * 0.95)) and previous_bbox is None:
+                continue
+
+            # Favor contours sitting right on the walking corridor just above the rungs
+            corridor_prox = 1.0 - min(1.0, abs((y_c + h_c) - torso_bottom) / max(18.0, float(torso_bottom)))
+            score = np.log1p(a) + 2.0 * fill_ratio + min(2.2, mean_diff / 18.0) + 0.85 * corridor_prox
+            if yolo_bbox is not None:
+                yx, yy, yw, yh = yolo_bbox
+                inter_x = max(0, min(x_c + w_c, yx + yw) - max(x_c, yx))
+                if inter_x > 0:
+                    score += 2.0 * (inter_x / max(1.0, float(max(w_c, yw))))
+            if previous_bbox is not None:
+                px, py, pw, ph = previous_bbox
+                previous_cx = px + pw / 2.0
+                previous_cy = py + ph / 2.0
+                candidate_cx = x_c + w_c / 2.0
+                candidate_cy = y_c + h_c / 2.0
+                distance = np.hypot(candidate_cx - previous_cx, candidate_cy - previous_cy)
+                distance_scale = max(36.0, min(140.0, rw * 0.18))
+                score += 3.0 * np.exp(-distance / distance_scale)
+                score -= min(3.2, distance / distance_scale)
+            if score > max_a:
+                max_a = score
                 best_c = c
 
         if best_c is None and yolo_bbox is None:
@@ -742,33 +947,45 @@ class ParallelYoloOpenCVEngine:
 
         if best_c is not None:
             cx, cy, cw, ch = cv2.boundingRect(best_c)
+            # Trim thin tail extensions from the horizontal torso core bounds (cx, cw)
+            c_mask = np.zeros_like(core_mask)
+            cv2.drawContours(c_mask, [best_c], -1, 255, -1)
+            col_heights = np.sum(c_mask[:, cx:cx + cw] > 0, axis=0)
+            thick_cols = np.where(col_heights >= max(7, int(ch * 0.28)))[0]
+            if len(thick_cols) >= 12:
+                core_x1 = cx + int(thick_cols[0])
+                core_x2 = cx + int(thick_cols[-1]) + 1
+                if (core_x2 - core_x1) >= 16:
+                    cx, cw = core_x1, core_x2 - core_x1
+
             if yolo_bbox is not None:
                 yx, yy, yw, yh = yolo_bbox
-                cx = min(cx, yx)
-                cy = min(cy, yy)
-                cw = max(cx + cw, yx + yw) - cx
-                ch = max(cy + ch, yy + yh) - cy
+                # Fuse YOLO bbox only if it is consistent with or refines the torso
+                if abs((yx + yw / 2.0) - (cx + cw / 2.0)) < max(cw, yw) * 0.85:
+                    cx = min(cx, yx)
+                    cy = min(cy, yy)
+                    cw = max(cx + cw, yx + yw) - cx
+                    ch = max(cy + ch, yy + yh) - cy
         else:
             cx, cy, cw, ch = yolo_bbox
 
         # Build spatial gate:
-        # - Above the rungs (torso & tail): allow tail extension behind body (+140px left/right) and +18px front
-        # - At & below the rungs (paw dip zone): STRICTLY restrict X to the torso core [cx - 8 .. cx + cw + 8]!
-        #   This guarantees that rungs outside the torso's footprint can NEVER turn green!
+        # - Above the rungs (torso & tail): allow full rodent tail extension (+260px) and snout extension
+        # - At & below the rungs (paw/nose dip zone): restrict X to the true torso+head footprint [cx - 10 .. cx + cw + 14]!
         spatial_gate = np.zeros((rh, rw), dtype=np.uint8)
 
-        upper_x1 = max(0, cx - 150)
-        upper_x2 = min(rw, cx + cw + 25)
+        upper_x1 = max(0, cx - 260)
+        upper_x2 = min(rw, cx + cw + 260)
         spatial_gate[:torso_bottom, upper_x1:upper_x2] = 255
 
-        # Paw zone X-window: only directly underneath the mouse's torso (exclude tail and far ahead of nose!)
-        paw_x1 = max(0, cx + int(cw * 0.04) - 6)
-        paw_x2 = min(rw, cx + cw - 4)
+        # Below-rung zone X-window: covers the true torso+head footprint (hindlimb, forelimb, and snout)
+        paw_x1 = max(0, cx - 10)
+        paw_x2 = min(rw, cx + cw + 14)
         if paw_x2 > paw_x1:
             spatial_gate[torso_bottom:, paw_x1:paw_x2] = 255
 
-        if yolo_seg_mask is not None:
-            yolo_dilated = cv2.dilate(yolo_seg_mask, np.ones((15, 15), np.uint8), iterations=1)
+        if yolo_bbox is not None and yolo_seg_mask is not None:
+            yolo_dilated = cv2.dilate(yolo_seg_mask, self.k_yolo_dilate, iterations=1)
             spatial_gate = cv2.bitwise_or(spatial_gate, yolo_dilated)
 
         return (cx, cy, cw, ch), spatial_gate
@@ -793,6 +1010,22 @@ class AutoAdaptiveLadderEngine:
             else:
                 img = img[:, :, 0]
         return np.squeeze(img).astype(np.uint8)
+
+    @staticmethod
+    def compute_outlier_rejected_bg(stack):
+        """
+        Computes a true static background image without 95th-percentile brightness inflation.
+        Rejects dark foreground outliers (frames where the dark rodent passes over a pixel)
+        relative to the 88th-percentile reference, then averages the clean background frames
+        so static table imperfections and wood/metal textures retain their exact resting intensity.
+        """
+        if stack.shape[0] <= 2:
+            return np.max(stack, axis=0).astype(np.uint8)
+        p88 = np.percentile(stack, 88, axis=0)
+        clean_mask = stack >= (p88 - 14.0)
+        bg_sum = np.sum(stack.astype(np.float32) * clean_mask, axis=0)
+        bg_cnt = np.maximum(1, np.sum(clean_mask, axis=0))
+        return np.clip(np.round(bg_sum / bg_cnt), 0, 255).astype(np.uint8)
 
     def auto_calibrate_from_video(self, cap, num_bg_samples=28):
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -820,7 +1053,7 @@ class AutoAdaptiveLadderEngine:
             raise RuntimeError("Could not read frames for automatic calibration.")
 
         stack_full = np.stack(frames_gray, axis=0)
-        clean_bg_full = np.percentile(stack_full, 95, axis=0).astype(np.uint8)
+        clean_bg_full = self.compute_outlier_rejected_bg(stack_full)
         clean_bg_full = self._ensure_gray_2d(clean_bg_full)
         fh, fw = clean_bg_full.shape[:2]
 
@@ -927,9 +1160,9 @@ class AutoAdaptiveLadderEngine:
 
         bg_median = float(np.median(roi_bg[body_y1:body_y2, :]))
         if best_mouse_gray_p82 is not None:
-            dark_thresh = int(np.clip(max(best_mouse_gray_p82 + 16, bg_median - 26), 115, 158))
+            dark_thresh = int(np.clip(best_mouse_gray_p82 + 32, 112, 146))
         else:
-            dark_thresh = int(np.clip(bg_median - 26, 120, 155))
+            dark_thresh = int(np.clip(bg_median - 45, 115, 145))
 
         diff_thresh = 24
 
@@ -1046,8 +1279,8 @@ class ElasticLadderTracker:
                     ix, iy = float(init_2d[i, 0]), float(init_2d[i, 1])
 
                     if mx1 <= px <= mx2 and my1 <= py <= my2:
-                        next_2d[i, 0] = 0.9 * px + 0.1 * (ix + self.global_dx)
-                        next_2d[i, 1] = 0.9 * py + 0.1 * (iy + self.global_dy)
+                        next_2d[i, 0] = ix + self.global_dx
+                        next_2d[i, 1] = iy + self.global_dy
                         continue
 
                     if good_mask[i] and abs(px - (ix + self.global_dx)) < 12.0 and abs(py - (iy + self.global_dy)) < 16.0:
@@ -1270,15 +1503,22 @@ class DLCAddonManager:
 
                     dx, dy, d_sec = d["x"], d["y"], d["sec"]
 
-                    move_dir = 1.0
-                    if len(traj) >= 2:
-                        near_pts = [pt for pt in traj if abs(pt[2] - d_sec) <= 0.35]
-                        if len(near_pts) >= 2 and abs(near_pts[-1][0] - near_pts[0][0]) > 4:
+                    move_dir = float(d.get("move_dir", 1.0))
+                    if "move_dir" not in d and len(traj) >= 2:
+                        near_pts = [pt for pt in traj if abs(pt[2] - d_sec) <= 0.60]
+                        if len(near_pts) >= 2 and abs(near_pts[-1][0] - near_pts[0][0]) > 35:
                             move_dir = 1.0 if (near_pts[-1][0] - near_pts[0][0]) > 0 else -1.0
                         else:
                             move_dir = 1.0 if (traj[-1][0] - traj[0][0]) >= 0 else -1.0
 
-                    if "body_left_x" in d and "body_width" in d:
+                    if "torso_left_x" in d and "torso_width" in d:
+                        b_left = float(d["torso_left_x"])
+                        b_w = max(24.0, float(d["torso_width"]))
+                        if move_dir >= 0:
+                            rel_pos_norm = (dx - b_left) / b_w
+                        else:
+                            rel_pos_norm = ((b_left + b_w) - dx) / b_w
+                    elif "body_left_x" in d and "body_width" in d:
                         b_left = float(d["body_left_x"])
                         b_w = max(28.0, float(d["body_width"]))
                         if move_dir >= 0:
@@ -1292,20 +1532,44 @@ class DLCAddonManager:
 
                     aspect_ratio = float(d.get("dip_aspect", 1.0))
                     dip_depth = float(d.get("dip_depth", 10.0))
+                    skin_score = float(d.get("paw_skin_score", 0.0))
+                    head_pitch_down = bool(d.get("head_pitch_down", False))
 
-                    if rel_pos_norm > 0.85 and aspect_ratio > 1.20 and dip_depth < 24:
-                        d["dlc_part"] = "ORR (Exploráció)"
-                        d["dlc_code"] = "NOSE"
-                    elif rel_pos_norm < 0.38:
-                        if aspect_ratio > 1.75 and dip_depth < 14:
-                            d["dlc_part"] = "FAROK (Billenés)"
-                            d["dlc_code"] = "HIND_TAIL"
-                        else:
-                            d["dlc_part"] = "HÁTSÓ LÁB (Lábhiba)"
-                            d["dlc_code"] = "PAW"
-                    else:
-                        d["dlc_part"] = "MELLSŐ LÁB (Lábhiba)"
-                        d["dlc_code"] = "PAW"
+                    part_label, part_code = self.classify_dip_features(
+                        rel_pos_norm, aspect_ratio, dip_depth, skin_score, head_pitch_down
+                    )
+                    d["dlc_part"] = part_label
+                    d["dlc_code"] = part_code
+
+    @staticmethod
+    def classify_dip_features(rel_pos_norm, aspect_ratio, dip_depth, skin_score=0.0, head_pitch_down=False):
+        """
+        Distinguishes true limb foot-faults (Forelimb / Hindlimb slips) from
+        anterior Nose/Snout exploration and posterior Tail dips.
+        `rel_pos_norm` is normalized [0..1] along the tail-trimmed torso+head core
+        (0.0 = rump/hip base, 1.0 = snout tip).
+        """
+        # 1. Anterior Snout / Nose Exploration Zone
+        if rel_pos_norm >= 0.75 or (rel_pos_norm >= 0.68 and head_pitch_down):
+            # Unmistakable pink paw skin (skin_score >= 12.0) or narrow deep extension under the shoulder/neck is a forepaw slip
+            is_distinct_forepaw = (
+                rel_pos_norm < 0.86
+                and (
+                    skin_score >= 12.0
+                    or (not head_pitch_down and aspect_ratio < 0.72 and dip_depth >= 14.0 and skin_score >= 9.5)
+                )
+            )
+            if not is_distinct_forepaw:
+                return "ORR (Exploráció)", "NOSE"
+
+        # 2. Posterior Tail / Rump Zone
+        if rel_pos_norm < 0.10 or (rel_pos_norm < 0.26 and aspect_ratio > 1.45 and dip_depth < 15.0):
+            return "FAROK (Billenés)", "HIND_TAIL"
+
+        # 3. Hindlimb vs. Forelimb Foot-Fault Zone
+        if rel_pos_norm < 0.46:
+            return "HÁTSÓ LÁB (Lábhiba)", "PAW"
+        return "MELLSŐ LÁB (Lábhiba)", "PAW"
 
 
 # ==============================================================================
@@ -1376,6 +1640,9 @@ class PerVideoIDTrackerApp:
         self.kernel_fill = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
         self.kernel_rung_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
         self.kernel_sag_guard = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 13))
+        self.kernel_blackhat_13 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+        self.kernel_torso_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 7))
+        self.kernel_grad_3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 
         self.gpu_available = cv2.ocl.haveOpenCL()
         self.dlc_addon = DLCAddonManager(self.log)
@@ -1706,7 +1973,7 @@ class PerVideoIDTrackerApp:
         self.log_area.pack(fill="both", expand=True)
 
         self.log(
-            f"{APP_NAME} v{APP_VERSION} Ready! | Parallel YOLO + OpenCV Spatial Gating & Strict Rung Protection Active."
+            f"{APP_NAME} v{APP_VERSION} Ready! | Async YOLO + Anatomical OpenCV Dip Gating Active."
         )
 
     # ==========================================================================
@@ -1881,11 +2148,14 @@ class PerVideoIDTrackerApp:
         if "language" in data and data["language"] in ("hu", "en") and data["language"] != self.lang:
             self.toggle_language()
 
-        if data.get("profile_version") == "3.5":
-            self.calib_dark_thresh = int(data.get("calib_dark_thresh", 135))
-            self.calib_diff_thresh = int(data.get("calib_diff_thresh", 24))
-            self.calib_ladder_thresh = int(data.get("calib_ladder_thresh", 132))
-            self.calib_fault_Ratio = int(data.get("calib_fault_Ratio", 74))
+        if "calib_dark_thresh" in data:
+            self.calib_dark_thresh = int(np.clip(data["calib_dark_thresh"], 50, 210))
+        if "calib_diff_thresh" in data:
+            self.calib_diff_thresh = int(np.clip(data["calib_diff_thresh"], 8, 95))
+        if "calib_ladder_thresh" in data:
+            self.calib_ladder_thresh = int(np.clip(data["calib_ladder_thresh"], 40, 195))
+        if "calib_fault_Ratio" in data:
+            self.calib_fault_Ratio = int(np.clip(data["calib_fault_Ratio"], 35, 95))
 
         if "dip_cooldown_sec" in data:
             self.var_cooldown.set(f"{float(data['dip_cooldown_sec']):.2f}")
@@ -1966,7 +2236,10 @@ class PerVideoIDTrackerApp:
                 self.log_area.insert(tk.END, message + "\n")
                 self.log_area.see(tk.END)
                 self.log_area.config(state="disabled")
-        self.root.after(0, _append)
+        try:
+            self.root.after(0, _append)
+        except (RuntimeError, tk.TclError):
+            pass
 
     def update_row_status(self, uid, status_text):
         def _update():
@@ -1974,7 +2247,10 @@ class PerVideoIDTrackerApp:
                 vals = list(self.tree.item(uid, "values"))
                 vals[2] = status_text
                 self.tree.item(uid, values=vals)
-        self.root.after(0, _update)
+        try:
+            self.root.after(0, _update)
+        except (RuntimeError, tk.TclError):
+            pass
 
     def increment_progress(self, total):
         def _inc():
@@ -1982,7 +2258,10 @@ class PerVideoIDTrackerApp:
             pct = (self.completed_videos / max(1, total)) * 100
             self.progress_bar["value"] = pct
             self.progress_lbl.config(text=self.tr("prog_run", done=self.completed_videos, total=total, pct=pct))
-        self.root.after(0, _inc)
+        try:
+            self.root.after(0, _inc)
+        except (RuntimeError, tk.TclError):
+            pass
 
     def browse_videos(self):
         files = filedialog.askopenfilenames(
@@ -2180,7 +2459,7 @@ class PerVideoIDTrackerApp:
         if not bg_frames:
             return None
         stack = np.stack(bg_frames, axis=0)
-        return np.percentile(stack, 95, axis=0).astype(np.uint8)
+        return AutoAdaptiveLadderEngine.compute_outlier_rejected_bg(stack)
 
     def _create_ladder_mask(self, base_gray, ladder_thresh, fault_y_local=None):
         """
@@ -2194,8 +2473,7 @@ class PerVideoIDTrackerApp:
 
         _, dark_rungs = cv2.threshold(base_gray, ladder_thresh, 255, cv2.THRESH_BINARY_INV)
 
-        k_bh = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
-        blackhat = cv2.morphologyEx(base_gray, cv2.MORPH_BLACKHAT, k_bh)
+        blackhat = cv2.morphologyEx(base_gray, cv2.MORPH_BLACKHAT, self.kernel_blackhat_13)
         _, bh_mask = cv2.threshold(blackhat, max(15, int((205 - ladder_thresh) * 0.28)), 255, cv2.THRESH_BINARY)
 
         edges = cv2.Canny(base_gray, 45, 125)
@@ -2218,9 +2496,12 @@ class PerVideoIDTrackerApp:
         ladder_mask = cv2.dilate(clean_ladder, self.kernel_sag_guard, iterations=1)
 
         if fault_y_local is not None:
+            upper_rod_y = max(5, int(fault_y_local) - max(42, int(rh * 0.155)))
             top_clear_y = max(5, int(fault_y_local) - 22)
             bottom_cutoff = min(rh, int(fault_y_local) + 22)
-            ladder_mask[:top_clear_y, :] = 0
+            upper_rods_tight = cv2.dilate(clean_ladder, self.kernel_small, iterations=1)
+            ladder_mask[:upper_rod_y, :] = 0
+            ladder_mask[upper_rod_y:top_clear_y, :] = upper_rods_tight[upper_rod_y:top_clear_y, :]
             ladder_mask[bottom_cutoff:, :] = 0
         else:
             top_clear_y = max(5, int(rh * 0.45))
@@ -2228,114 +2509,304 @@ class PerVideoIDTrackerApp:
 
         return ladder_mask
 
+    @staticmethod
+    def _bbox_iou(first, second):
+        if first is None or second is None:
+            return 0.0
+        ax, ay, aw, ah = first
+        bx, by, bw, bh = second
+        left, top = max(ax, bx), max(ay, by)
+        right, bottom = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+        intersection = max(0, right - left) * max(0, bottom - top)
+        union = aw * ah + bw * bh - intersection
+        return intersection / max(1.0, float(union))
+
+    def _select_mouse_contour(self, candidate_masks, gray, base_gray, previous_bbox, anchor_bbox, fault_y_local=None):
+        rh, rw = gray.shape[:2]
+        if fault_y_local is None:
+            fault_y_local = int(rh * 0.72)
+        torso_corridor_y = max(14, int(fault_y_local) - 10)
+        min_corridor_bottom = max(10, int(torso_corridor_y * 0.34))
+        max_valid_torso_top = max(12, int(fault_y_local) - max(50, int(rh * 0.18)))
+        min_torso_h = max(28, int(rh * 0.105))
+
+        best_contour = None
+        best_mask = None
+        best_score = float("-inf")
+        for candidate_mask, gate_bonus in candidate_masks:
+            contours, _ = cv2.findContours(
+                candidate_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if area < 300 or area > rw * rh * 0.65:
+                    continue
+                x, y, width, height = cv2.boundingRect(contour)
+                upper_h = min(y + height, torso_corridor_y) - y
+                aspect_ratio = width / max(1.0, float(height))
+                # Reject flat rung-edge slivers, shadows hanging below rungs, and thin artifacts
+                if (
+                    width < 24
+                    or height < min_torso_h
+                    or upper_h < min_torso_h
+                    or upper_h < height * 0.45
+                    or y >= max_valid_torso_top
+                    or (y + height) < min_corridor_bottom
+                    or aspect_ratio < 0.42
+                    or aspect_ratio > 10.5
+                ):
+                    continue
+                # A real rodent torso has substantial body mass above the fault line
+                if (y + height * 0.45) >= fault_y_local:
+                    continue
+                fill_ratio = area / max(1.0, float(width * height))
+                if fill_ratio < 0.12:
+                    continue
+
+                roi_gray = gray[y:y + height, x:x + width]
+                roi_base = base_gray[y:y + height, x:x + width]
+                foreground = candidate_mask[y:y + height, x:x + width] > 0
+                if np.any(foreground):
+                    fg_diff = (
+                        roi_base[foreground].astype(np.int16) - roi_gray[foreground].astype(np.int16)
+                    )
+                    contrast = float(np.percentile(np.abs(fg_diff), 65))
+                    darkening = float(np.mean(np.maximum(0, fg_diff)))
+                    p85_darkening = float(np.percentile(np.maximum(0, fg_diff), 85))
+                else:
+                    contrast = 0.0
+                    darkening = 0.0
+                    p85_darkening = 0.0
+                if p85_darkening < 26.0 and previous_bbox is None:
+                    continue
+
+                # Reject low-contrast ghost contours or table imperfections
+                if (contrast < 11.0 or darkening < 7.5) and anchor_bbox is None and previous_bbox is None:
+                    continue
+
+                # Walking corridor vertical alignment bonus (animal walks right above the rungs)
+                corridor_align = 1.0 - min(1.0, abs(min(y + height, torso_corridor_y) - torso_corridor_y) / max(18.0, float(torso_corridor_y)))
+
+                score = np.log1p(area) + 2.2 * fill_ratio + 0.8 * corridor_align
+                score += float(np.clip(contrast / 26.0, -1.0, 2.5)) + gate_bonus
+                candidate_bbox = (x, y, width, height)
+                score += 2.2 * self._bbox_iou(candidate_bbox, anchor_bbox)
+
+                if previous_bbox is not None:
+                    previous_cx = previous_bbox[0] + previous_bbox[2] / 2.0
+                    previous_cy = previous_bbox[1] + previous_bbox[3] / 2.0
+                    candidate_cx = x + width / 2.0
+                    candidate_cy = y + height / 2.0
+                    distance = np.hypot(candidate_cx - previous_cx, candidate_cy - previous_cy)
+                    distance_scale = max(36.0, min(140.0, rw * 0.18))
+                    score += 3.2 * np.exp(-distance / distance_scale)
+                    score -= min(3.2, distance / distance_scale)
+
+                if score > best_score:
+                    best_score = score
+                    best_contour = contour
+                    best_mask = candidate_mask
+        return best_contour, best_mask
+
+    @staticmethod
+    def _compute_skin_chromaticity(crop_bgr):
+        """
+        Computes a normalized pink/skin chromaticity index for rodent paws & snout tips
+        without distorting background grayscale subtraction.
+        """
+        if crop_bgr is None or crop_bgr.ndim != 3 or crop_bgr.shape[2] < 3:
+            return None
+        b_ch = crop_bgr[:, :, 0].astype(np.float32)
+        g_ch = crop_bgr[:, :, 1].astype(np.float32)
+        r_ch = crop_bgr[:, :, 2].astype(np.float32)
+        skin_idx = np.maximum(0.0, r_ch - g_ch) + 0.65 * np.maximum(0.0, r_ch - b_ch)
+        return cv2.GaussianBlur(skin_idx, (3, 3), 0)
+
     def _detect_mouse_on_crop(
         self, crop, base_gray, inv_ladder_mask, rw, rh, dark_t, diff_t,
-        fault_y_local=None, use_umat=False, u_base_smooth=None, u_inv_ladder=None, mog2_subtractor=None
+        fault_y_local=None, use_umat=False, u_base_smooth=None, u_inv_ladder=None,
+        mog2_subtractor=None, stream_id=None, frame_idx=None, ai_max_age=3,
+        previous_bbox=None, base_smooth_cached=None, return_skin=False, use_yolo=None
     ):
         """
-        Parallel YOLO + OpenCV Spatial Gating with Strict Rung Protection:
-        1. Locates the rodent's torso core first (via OpenCV + parallel YOLO).
-        2. Restricts the search space (`spatial_gate`) to the animal's true footprint so distant rungs NEVER turn green!
-        3. NEVER overrides the blue ladder mask (`inv_ladder_mask`) at or near the fault line,
-           eliminating the green rungs and false red dip circles seen in your screenshot!
+        Parallel YOLO + Hysteresis Geodesic OpenCV Segmentation with Strict Rung & Table Imperfection Protection:
+        1. Keeps pure grayscale (`gray_raw`) matched to `base_gray` so warm lighting never causes false diffs,
+           while using `skin_index` specifically to rescue pink paws and snout tips.
+        2. Suppresses pre-existing static background imperfections (dark knots, scratches, bolts, table edges)
+           so they cannot self-reinforce or masquerade as the animal.
+        3. Uses Hysteresis Geodesic Reconstruction so ONLY dark pixels physically connected to a genuine
+           foreground/motion seed survive.
+        4. Strictly enforces `inv_ladder_mask` at and near the rungs and masks out table surface noise below the dip zone.
         """
         if fault_y_local is None:
             fault_y_local = int(rh * 0.72)
 
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
-        gray = np.squeeze(gray).astype(np.uint8)
+        gray_raw = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        gray_raw = np.squeeze(gray_raw).astype(np.uint8)
+        skin_index = self._compute_skin_chromaticity(crop)
 
-        gray_smooth = cv2.GaussianBlur(gray, (3, 3), 0)
-        base_smooth = cv2.GaussianBlur(base_gray, (3, 3), 0)
-
-        # STEP 1: Locate animal & build spatial gate (YOLO + OpenCV Torso Core)
-        core_bbox, spatial_gate = None, None
-        if self.var_yolo_fusion.get():
-            core_bbox, spatial_gate = self.hybrid_locator.locate_animal_roi_and_mask(
-                crop, gray_smooth, base_smooth, inv_ladder_mask, fault_y_local, dark_t, diff_t
-            )
-            if core_bbox is None:
-                return False, None, None
-
-        # STEP 2: Compute pixel-level mouse mask (GPU UMat or CPU)
-        if use_umat and u_base_smooth is not None and u_inv_ladder is not None:
-            u_crop = cv2.UMat(crop)
-            u_gray = cv2.cvtColor(u_crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else u_crop
-            u_gray_smooth = cv2.GaussianBlur(u_gray, (3, 3), 0)
-
-            u_diff = cv2.subtract(u_base_smooth, u_gray_smooth)
-            _, u_diff_mask = cv2.threshold(u_diff, max(16, diff_t), 255, cv2.THRESH_BINARY)
-            _, u_dark_mask = cv2.threshold(u_gray_smooth, dark_t, 255, cv2.THRESH_BINARY_INV)
-            u_raw = cv2.bitwise_and(u_diff_mask, u_dark_mask)
-
-            # STRICT RUNG PROTECTION: Never override u_inv_ladder near the rungs!
-            u_raw = cv2.bitwise_and(u_raw, u_inv_ladder)
-            u_clean = cv2.morphologyEx(u_raw, cv2.MORPH_OPEN, self.kernel_small)
-            u_clean = cv2.morphologyEx(u_clean, cv2.MORPH_CLOSE, self.kernel_horiz)
-            u_clean = cv2.bitwise_and(u_clean, u_inv_ladder)
-            clean_mask = u_clean.get()
+        # Effective darkness map enhances pink paws/digits without corrupting background subtraction
+        if skin_index is not None:
+            gray_eff = np.clip(gray_raw.astype(np.float32) - 1.8 * skin_index, 0, 255).astype(np.uint8)
         else:
-            diff = cv2.subtract(base_smooth, gray_smooth)
-            _, diff_mask = cv2.threshold(diff, max(16, diff_t), 255, cv2.THRESH_BINARY)
-            _, dark_mask = cv2.threshold(gray_smooth, dark_t, 255, cv2.THRESH_BINARY_INV)
-            raw_mask = cv2.bitwise_and(diff_mask, dark_mask)
+            gray_eff = gray_raw
 
-            # In the upper torso zone ONLY (strictly above the rungs), allow jet-black fur rescue
-            torso_top_zone = max(10, int(fault_y_local) - 20)
-            _, deep_black_upper = cv2.threshold(gray_smooth[:torso_top_zone, :], 55, 255, cv2.THRESH_BINARY_INV)
-            _, min_diff_upper = cv2.threshold(diff[:torso_top_zone, :], 10, 255, cv2.THRESH_BINARY)
-            raw_mask[:torso_top_zone, :] = cv2.bitwise_or(
-                raw_mask[:torso_top_zone, :],
-                cv2.bitwise_and(deep_black_upper, min_diff_upper)
+        gray_raw_smooth = cv2.GaussianBlur(gray_raw, (3, 3), 0)
+        gray_eff_smooth = cv2.GaussianBlur(gray_eff, (3, 3), 0)
+        base_smooth = base_smooth_cached if base_smooth_cached is not None else cv2.GaussianBlur(base_gray, (3, 3), 0)
+
+        # STEP 1: Locate animal & build spatial gate (YOLO + Hysteresis OpenCV Torso Core)
+        core_bbox, spatial_gate = None, None
+        if use_yolo is None:
+            try:
+                use_yolo = bool(self.var_yolo_fusion.get())
+            except (RuntimeError, tk.TclError):
+                use_yolo = True
+        if use_yolo:
+            core_bbox, spatial_gate = self.hybrid_locator.locate_animal_roi_and_mask(
+                crop, gray_raw_smooth, base_smooth, inv_ladder_mask, fault_y_local, dark_t,
+                diff_t, stream_id=stream_id, frame_idx=frame_idx, ai_max_age=ai_max_age,
+                previous_bbox=previous_bbox
             )
 
-            # STRICT RUNG PROTECTION: Subtract the ladder mask unconditionally!
-            raw_mask = cv2.bitwise_and(raw_mask, inv_ladder_mask)
+        # STEP 2: Compute pixel-level mouse mask with Static Imperfection Guard
+        diff_dark = cv2.subtract(base_smooth, gray_raw_smooth)
+        diff_abs = cv2.absdiff(base_smooth, gray_raw_smooth)
+        if skin_index is not None:
+            # Boost foreground difference where pink paw skin appears against the background
+            diff_eff = np.clip(diff_dark.astype(np.float32) + 0.85 * skin_index, 0, 255).astype(np.uint8)
+        else:
+            diff_eff = diff_dark
 
-            clean_mask = cv2.morphologyEx(raw_mask, cv2.MORPH_OPEN, self.kernel_small)
-            clean_mask = cv2.morphologyEx(clean_mask, cv2.MORPH_CLOSE, self.kernel_horiz)
-            clean_mask = cv2.bitwise_and(clean_mask, inv_ladder_mask)
+        strict_diff_t = max(10, int(diff_t * 0.74))
+        low_diff_t = max(6, int(diff_t * 0.36))
+        blemish_diff_t = max(strict_diff_t + 14, int(diff_t * 1.55))
 
-        # STEP 3: Apply Spatial Gate from Parallel YOLO/Torso Locator
+        # Identify pre-existing static dark spots / high-gradient imperfections in the empty background
+        bg_grad = cv2.morphologyEx(base_smooth, cv2.MORPH_GRADIENT, self.kernel_grad_3)
+        static_blemish = (base_smooth <= min(215, dark_t + 8)) | (bg_grad >= 16)
+        static_blemish = cv2.dilate(
+            static_blemish.astype(np.uint8) * 255, self.kernel_small, iterations=1
+        ) > 0
+
+        _, diff_mask = cv2.threshold(diff_eff, strict_diff_t, 255, cv2.THRESH_BINARY)
+        _, blemish_pass = cv2.threshold(diff_dark, blemish_diff_t, 255, cv2.THRESH_BINARY)
+        diff_mask[static_blemish] = blemish_pass[static_blemish]
+
+        _, dark_mask = cv2.threshold(gray_eff_smooth, min(230, dark_t + 8), 255, cv2.THRESH_BINARY_INV)
+        raw_mask = cv2.bitwise_and(diff_mask, dark_mask)
+
+        # Also capture high-contrast foreground (e.g., agouti/light fur edge) where background is clean
+        _, strong_abs_mask = cv2.threshold(diff_abs, max(22, int(diff_t * 1.25)), 255, cv2.THRESH_BINARY)
+        strong_abs_mask[static_blemish] = blemish_pass[static_blemish]
+        _, body_dark_mask = cv2.threshold(gray_raw_smooth, min(220, dark_t + 12), 255, cv2.THRESH_BINARY_INV)
+        raw_mask = cv2.bitwise_or(raw_mask, cv2.bitwise_and(strong_abs_mask, body_dark_mask))
+
+        # Upper torso zone (strictly above the rungs): Hysteresis Geodesic Fur & Tail Reconstruction
+        # Reconstruct dark torso/tail pixels connected to genuine foreground seeds while blocking static blemishes
+        torso_top_zone = max(10, int(fault_y_local) - 16)
+        seed_upper = raw_mask[:torso_top_zone, :].copy()
+        if previous_bbox is not None:
+            px, py, pw, ph = previous_bbox
+            px1, px2 = max(0, int(px - 14)), min(rw, int(px + pw + 14))
+            py1, py2 = max(0, int(py - 8)), min(torso_top_zone, int(py + ph + 8))
+            if px2 > px1 and py2 > py1:
+                stat_seed = (
+                    (diff_dark[py1:py2, px1:px2] >= low_diff_t)
+                    & (gray_raw_smooth[py1:py2, px1:px2] <= dark_t)
+                    & (~static_blemish[py1:py2, px1:px2])
+                ).astype(np.uint8) * 255
+                seed_upper[py1:py2, px1:px2] = cv2.bitwise_or(seed_upper[py1:py2, px1:px2], stat_seed)
+
+        support_upper = (
+            (gray_raw_smooth[:torso_top_zone, :] <= dark_t)
+            & (
+                ((diff_dark[:torso_top_zone, :] >= low_diff_t) & (~static_blemish[:torso_top_zone, :]))
+                | (diff_dark[:torso_top_zone, :] >= blemish_diff_t)
+            )
+        ).astype(np.uint8) * 255
+        support_upper = cv2.bitwise_and(support_upper, inv_ladder_mask[:torso_top_zone, :])
+
+        seed_upper_dilated = cv2.dilate(seed_upper, self.kernel_upper_bridge, iterations=3)
+        reconstructed_torso = cv2.bitwise_and(support_upper, seed_upper_dilated)
+        raw_mask[:torso_top_zone, :] = cv2.bitwise_or(raw_mask[:torso_top_zone, :], reconstructed_torso)
+
+        # Suppress deep table surface below the maximum possible paw reach (fault_y_local + 48px)
+        max_reach_y = min(rh, int(fault_y_local) + max(38, int(rh * 0.24)))
+        if max_reach_y < rh:
+            raw_mask[max_reach_y:, :] = 0
+
+        # STRICT RUNG PROTECTION: Subtract the ladder mask unconditionally!
+        raw_mask = cv2.bitwise_and(raw_mask, inv_ladder_mask)
+
+        clean_mask = cv2.morphologyEx(raw_mask, cv2.MORPH_OPEN, self.kernel_small)
+        clean_mask = cv2.morphologyEx(clean_mask, cv2.MORPH_CLOSE, self.kernel_horiz)
+        clean_mask = cv2.bitwise_and(clean_mask, inv_ladder_mask)
+
+        # Build candidate masks: prioritize spatially gated mask
+        candidate_masks = []
         if spatial_gate is not None:
-            clean_mask = cv2.bitwise_and(clean_mask, spatial_gate)
+            gated_clean = cv2.bitwise_and(clean_mask, spatial_gate)
+            candidate_masks.append((gated_clean, 1.25))
+        candidate_masks.append((clean_mask, 0.0))
 
-        contours, _ = cv2.findContours(clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        best_contour = None
-        max_area = 0
-        max_allowed_area = rw * rh * 0.65
-
-        for c in contours:
-            area = cv2.contourArea(c)
-            if 260 < area < max_allowed_area:
-                x_c, y_c, w_c, h_c = cv2.boundingRect(c)
-                if w_c > h_c * 5.8 or (h_c > w_c * 3.0 and y_c < 6):
-                    continue
-                if area > max_area:
-                    max_area = area
-                    best_contour = c
+        best_contour, selected_mask = self._select_mouse_contour(
+            candidate_masks, gray_raw_smooth, base_smooth, previous_bbox, core_bbox,
+            fault_y_local=fault_y_local
+        )
 
         if best_contour is None:
+            if return_skin:
+                return False, None, None, skin_index
             return False, None, None
 
+        # For paw & tail attachment, restrict to spatial_gate if available so distant noise is never attached
+        attachment_source = cv2.bitwise_and(clean_mask, spatial_gate) if spatial_gate is not None else clean_mask
+        contours, _ = cv2.findContours(
+            attachment_source, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
         final_mouse_mask = np.zeros_like(clean_mask)
         x_c, y_c, w_c, h_c = cv2.boundingRect(best_contour)
         cv2.drawContours(final_mouse_mask, [best_contour], -1, 255, -1)
 
+        # Estimate tail-trimmed torso horizontal span for accurate paw attachment
+        col_heights = np.sum(final_mouse_mask[:max(12, int(fault_y_local) - 6), x_c:x_c + w_c] > 0, axis=0)
+        thick_cols = np.where(col_heights >= max(6, int(h_c * 0.25)))[0]
+        if len(thick_cols) >= 10:
+            torso_x1 = x_c + int(thick_cols[0])
+            torso_x2 = x_c + int(thick_cols[-1]) + 1
+        else:
+            torso_x1, torso_x2 = x_c, x_c + w_c
+        torso_w = max(16, torso_x2 - torso_x1)
+
         min_x, min_y = x_c, y_c
         max_x, max_y = x_c + w_c, y_c + h_c
 
-        # Attach genuine paw slips directly beneath the torso (excluding flat horizontal plexiglass reflections!)
+        # Attach genuine paw slips beneath the torso+head core AND contiguous tail segments above the rungs
         for c in contours:
-            if c is not best_contour:
+            if cv2.boundingRect(c) != (x_c, y_c, w_c, h_c):
                 c_area = cv2.contourArea(c)
-                if 42 < c_area < 1800:
+                if 10 <= c_area < 2200:
                     cx, cy, cw, ch = cv2.boundingRect(c)
-                    # Reject flat horizontal shelf/edge lines (like the bottom edge in your screenshot!)
-                    if cw > ch * 2.1:
+                    center_x = cx + cw / 2.0
+                    body_x_min = torso_x1 - max(6, int(torso_w * 0.05))
+                    body_x_max = torso_x2 + max(8, int(torso_w * 0.08))
+                    max_paw_y = min(max_reach_y, max(y_c + h_c + 34, int(fault_y_local) + int(rh * 0.26)))
+                    # 1. Tail segment above the ladder rungs adjacent to the body bounding box
+                    if (
+                        (cy + ch) <= torso_top_zone
+                        and cy >= y_c
+                        and ch <= max(28, int(h_c * 0.45))
+                        and (abs(cx + cw - min_x) <= 28 or abs(cx - max_x) <= 28)
+                    ):
+                        cv2.drawContours(final_mouse_mask, [c], -1, 255, -1)
+                        min_x, min_y = min(min_x, cx), min(min_y, cy)
+                        max_x, max_y = max(max_x, cx + cw), max(max_y, cy + ch)
                         continue
-                    if ch >= 7 and (x_c + 6 <= cx <= x_c + w_c - 6) and (y_c <= cy <= y_c + h_c + 32):
+                    # 2. Paw / snout dip under the torso+head core (ignore flat horizontal shelf reflections)
+                    if cw > ch * 1.9 or ch < 4:
+                        continue
+                    if body_x_min <= center_x <= body_x_max and y_c <= cy <= max_paw_y:
                         cv2.drawContours(final_mouse_mask, [c], -1, 255, -1)
                         min_x = min(min_x, cx)
                         min_y = min(min_y, cy)
@@ -2355,11 +2826,15 @@ class PerVideoIDTrackerApp:
         # Recompute tight bounding box from the cleaned final_mouse_mask
         ys, xs = np.where(final_mouse_mask > 0)
         if len(xs) == 0:
+            if return_skin:
+                return False, None, None, skin_index
             return False, None, None
         min_x, max_x = int(np.min(xs)), int(np.max(xs))
         min_y, max_y = int(np.min(ys)), int(np.max(ys))
 
         merged_bbox = (min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
+        if return_skin:
+            return True, final_mouse_mask, merged_bbox, skin_index
         return True, final_mouse_mask, merged_bbox
 
     def _quick_check_start_gate(self, crop, base_gray, inv_ladder_mask, x1_loc, x2_loc, dark_t, diff_t):
@@ -2369,79 +2844,482 @@ class PerVideoIDTrackerApp:
 
         gray = cv2.cvtColor(sub_crop, cv2.COLOR_BGR2GRAY) if sub_crop.ndim == 3 else sub_crop
         diff = cv2.subtract(sub_base, gray)
-        _, diff_mask = cv2.threshold(diff, max(16, diff_t), 255, cv2.THRESH_BINARY)
-        _, dark_mask = cv2.threshold(gray, min(200, dark_t + 10), 255, cv2.THRESH_BINARY_INV)
+        _, diff_mask = cv2.threshold(diff, max(10, int(diff_t * 0.68)), 255, cv2.THRESH_BINARY)
+        _, dark_mask = cv2.threshold(gray, min(220, dark_t + 12), 255, cv2.THRESH_BINARY_INV)
         diff_mask = cv2.bitwise_and(diff_mask, dark_mask)
         diff_mask = cv2.bitwise_and(diff_mask, sub_inv_lad)
-        return cv2.countNonZero(diff_mask) > 240
+        return cv2.countNonZero(diff_mask) > 110
 
-    def _check_real_dip_below_line(self, final_mouse_mask, fault_y_or_curve):
+    def _extract_rodent_anatomy(self, mouse_mask, fault_curve, bbox, previous_bbox=None, move_dir=1.0):
         """
-        Rejects flat horizontal plexiglass reflections (`sw > sh * 2.0`) and requires
-        a genuine vertical paw dip (`depth >= 6 px`, `area >= 42 px`).
+        Extracts a high-precision articulated rodent skeleton and tail-trimmed Torso+Head Core
+        using Distance-Transform Medial Ridge tracking, Dorsal/Ventral contour envelopes, and
+        automatic Tail-vs-Snout orientation detection:
+        - Axial Spine Chain: `tail_tip` -> `tail_mid` -> `tail_base` -> `hip_pt` -> `spine_mid` -> `shoulder_pt` -> `head_pt` -> `nose_pt`
+        - Ventral Limb Keypoints: `hind_paw_pt` (under hip corridor) & `fore_paw_pt` (under shoulder corridor)
+        - `torso_left_x`, `torso_width` (unaffected by long thin tail)
+        - `head_pitch_down` (True when the snout/head pitches downward toward the ladder gaps)
+        """
+        mh, mw = mouse_mask.shape[:2]
+        if bbox is None:
+            ys, xs = np.where(mouse_mask > 0)
+            if len(xs) == 0:
+                return None
+            bx, by = int(np.min(xs)), int(np.min(ys))
+            bw, bh = int(np.max(xs) - bx + 1), int(np.max(ys) - by + 1)
+        else:
+            bx, by, bw, bh = bbox
+
+        has_motion_dir = False
+        if previous_bbox is not None:
+            prev_cx = previous_bbox[0] + previous_bbox[2] / 2.0
+            curr_cx = bx + bw / 2.0
+            if abs(curr_cx - prev_cx) > 2.5:
+                move_dir = 1.0 if (curr_cx - prev_cx) >= 0 else -1.0
+                has_motion_dir = True
+
+        torso_limit = max(12, min(mh, int(np.min(fault_curve)) - 2))
+        bx_end = min(mw, bx + bw)
+        upper_mask = mouse_mask[:torso_limit, bx:bx_end]
+        if upper_mask.size == 0:
+            return None
+
+        # Separate thick Torso+Head from thin Tail using morphological opening + vertical column thickness
+        torso_open = cv2.morphologyEx(upper_mask, cv2.MORPH_OPEN, self.kernel_torso_open)
+        col_thickness = np.sum(torso_open > 0, axis=0)
+        if col_thickness.size == 0 or np.max(col_thickness) < 6:
+            col_thickness = np.sum(upper_mask > 0, axis=0)
+
+        min_torso_thick = max(6, int(np.max(col_thickness) * 0.28)) if col_thickness.size > 0 else 6
+        thick_cols = np.where(col_thickness >= min_torso_thick)[0]
+
+        if len(thick_cols) >= 10:
+            torso_left_x = bx + int(thick_cols[0])
+            torso_right_x = bx + int(thick_cols[-1]) + 1
+        else:
+            torso_left_x = bx
+            torso_right_x = bx_end
+        torso_width = max(20, torso_right_x - torso_left_x)
+
+        # Automatic Morphological Tail-vs-Snout Orientation Detection:
+        # A thin tail extending from the left of the torso core means the animal faces RIGHT (+1.0);
+        # a thin tail extending from the right of the torso core means the animal faces LEFT (-1.0)!
+        t_x0 = max(0, torso_left_x - bx)
+        t_x1 = min(upper_mask.shape[1], torso_right_x - bx)
+        left_tail_ext = int(t_x0)
+        right_tail_ext = int(upper_mask.shape[1] - t_x1)
+
+        if abs(left_tail_ext - right_tail_ext) >= 42:
+            morph_dir = 1.0 if left_tail_ext > right_tail_ext else -1.0
+            # Only override an active motion direction when a true long tail (>68px) extends behind the torso
+            if not has_motion_dir or abs(left_tail_ext - right_tail_ext) >= 68:
+                move_dir = morph_dir
+        elif not has_motion_dir and (t_x1 - t_x0) >= 24:
+            # Fallback when tail is hidden: compare left vs. right third thickness (rump is thicker than snout)
+            third = max(6, (t_x1 - t_x0) // 3)
+            left_mass = float(np.mean(col_thickness[t_x0:t_x0 + third]))
+            right_mass = float(np.mean(col_thickness[t_x1 - third:t_x1]))
+            if abs(left_mass - right_mass) > 3.5:
+                move_dir = 1.0 if left_mass > right_mass else -1.0
+
+        # Compute Distance-Transform Medial Ridge inside the tail-trimmed torso+head core
+        torso_crop = upper_mask[:, t_x0:t_x1]
+        dist_crop = cv2.distanceTransform((torso_crop > 0).astype(np.uint8), cv2.DIST_L2, 3)
+
+        ty, tx = np.where(torso_crop > 0)
+        fallback_y = float(np.mean(ty)) if len(ty) > 0 else float(by + bh * 0.45)
+
+        if move_dir >= 0:
+            rump_x = float(torso_left_x)
+            snout_x = float(torso_right_x - 1)
+        else:
+            rump_x = float(torso_right_x - 1)
+            snout_x = float(torso_left_x)
+        span_x = snout_x - rump_x
+
+        def sample_anatomical_joint(rel_norm, dorsal_bias=0.0, window_frac=0.06):
+            """Samples the distance-transform weighted medial spine Y at normalized torso position `rel_norm` [0=rump .. 1=snout]."""
+            gx = int(round(rump_x + rel_norm * span_x))
+            lx = int(np.clip(gx - torso_left_x, 0, max(0, torso_crop.shape[1] - 1)))
+            half_w = max(2, int(round(torso_width * window_frac)))
+            c0 = max(0, lx - half_w)
+            c1 = min(torso_crop.shape[1], lx + half_w + 1)
+            sub_m = torso_crop[:, c0:c1]
+            sub_d = dist_crop[:, c0:c1]
+            ys_s, xs_s = np.where(sub_m > 0)
+            if len(ys_s) == 0:
+                return (int(np.clip(gx, 0, mw - 1)), int(np.clip(round(fallback_y), 0, mh - 1)))
+            weights = sub_d[ys_s, xs_s] + 0.5
+            medial_y = float(np.sum(ys_s * weights) / np.sum(weights))
+            if dorsal_bias > 0.0:
+                dorsal_y = float(np.percentile(ys_s, 18))
+                medial_y = (1.0 - dorsal_bias) * medial_y + dorsal_bias * dorsal_y
+            elif dorsal_bias < 0.0:
+                ventral_y = float(np.percentile(ys_s, 82))
+                medial_y = (1.0 + dorsal_bias) * medial_y - dorsal_bias * ventral_y
+            return (int(np.clip(gx, 0, mw - 1)), int(np.clip(round(medial_y), 0, mh - 1)))
+
+        tail_base = sample_anatomical_joint(0.03, dorsal_bias=0.0)
+        hip_pt = sample_anatomical_joint(0.24, dorsal_bias=0.08)
+        spine_mid = sample_anatomical_joint(0.46, dorsal_bias=0.28)
+        shoulder_pt = sample_anatomical_joint(0.64, dorsal_bias=0.08)
+        head_pt = sample_anatomical_joint(0.82, dorsal_bias=0.0)
+        nose_pt = sample_anatomical_joint(0.98, dorsal_bias=-0.22, window_frac=0.035)
+
+        # If the anterior head/snout pitches downward into the rung gaps, track nose_pt down to the snout tip
+        ant_x_a = int(round(rump_x + 0.78 * span_x))
+        ant_x_b = int(round(rump_x + 1.00 * span_x))
+        ax1, ax2 = max(0, min(ant_x_a, ant_x_b)), min(mw, max(ant_x_a, ant_x_b) + 1)
+        snout_pitched_down = False
+        if ax2 > ax1 and head_pt[1] < mh:
+            ant_full = mouse_mask[max(0, head_pt[1]):, ax1:ax2]
+            ay_s, ax_s = np.where(ant_full > 0)
+            if len(ay_s) >= 8:
+                max_ant_y = int(head_pt[1] + np.max(ay_s))
+                if max_ant_y >= torso_limit + 4:
+                    tip_band = ay_s >= max(0, int(np.percentile(ay_s, 90)) - 2)
+                    nose_pt = (
+                        int(np.clip(ax1 + round(np.mean(ax_s[tip_band])), 0, mw - 1)),
+                        int(np.clip(head_pt[1] + round(np.max(ay_s[tip_band])), 0, mh - 1)),
+                    )
+                    snout_pitched_down = True
+
+        # True posterior tail tip & mid-tail keypoints (if tail extends behind torso_left_x / torso_right_x)
+        tail_tip = tail_base
+        tail_mid = tail_base
+        if move_dir >= 0 and t_x0 > 4:
+            tail_strip = upper_mask[:, :t_x0]
+            t_ys, t_xs = np.where(tail_strip > 0)
+            if len(t_xs) >= 4:
+                min_tx = int(np.min(t_xs))
+                tip_ys = t_ys[t_xs <= min_tx + 4]
+                tail_tip = (int(bx + min_tx), int(round(np.mean(tip_ys))))
+                mid_tx = (min_tx + t_x0) // 2
+                mid_ys = t_ys[np.abs(t_xs - mid_tx) <= 4]
+                if len(mid_ys) > 0:
+                    tail_mid = (int(bx + mid_tx), int(round(np.mean(mid_ys))))
+                else:
+                    tail_mid = ((tail_tip[0] + tail_base[0]) // 2, (tail_tip[1] + tail_base[1]) // 2)
+        elif move_dir < 0 and t_x1 < upper_mask.shape[1] - 4:
+            tail_strip = upper_mask[:, t_x1:]
+            t_ys, t_xs = np.where(tail_strip > 0)
+            if len(t_xs) >= 4:
+                max_tx = int(np.max(t_xs))
+                tip_ys = t_ys[t_xs >= max_tx - 4]
+                tail_tip = (int(bx + t_x1 + max_tx), int(round(np.mean(tip_ys))))
+                mid_tx = max_tx // 2
+                mid_ys = t_ys[np.abs(t_xs - mid_tx) <= 4]
+                if len(mid_ys) > 0:
+                    tail_mid = (int(bx + t_x1 + mid_tx), int(round(np.mean(mid_ys))))
+                else:
+                    tail_mid = ((tail_tip[0] + tail_base[0]) // 2, (tail_tip[1] + tail_base[1]) // 2)
+
+        # Ventral Forelimb & Hindlimb Keypoints (tracks paws on the rungs and during slips below the rungs)
+        def sample_ventral_paw(rel_start, rel_end, parent_joint):
+            x_a = int(round(rump_x + rel_start * span_x))
+            x_b = int(round(rump_x + rel_end * span_x))
+            px1 = max(0, min(x_a, x_b))
+            px2 = min(mw, max(x_a, x_b) + 1)
+            py1 = max(0, parent_joint[1])
+            if px2 <= px1 or py1 >= mh:
+                return (parent_joint[0], min(mh - 1, parent_joint[1] + 8))
+            sub_limb = mouse_mask[py1:, px1:px2]
+            ly, lx = np.where(sub_limb > 0)
+            if len(ly) < 3:
+                return (parent_joint[0], min(mh - 1, parent_joint[1] + 8))
+            p92_y = float(np.percentile(ly, 92))
+            bottom_band = ly >= max(0, int(p92_y) - 2)
+            paw_x = px1 + int(round(np.mean(lx[bottom_band])))
+            paw_y = py1 + int(round(np.max(ly[bottom_band])))
+            return (int(np.clip(paw_x, 0, mw - 1)), int(np.clip(paw_y, 0, mh - 1)))
+
+        hind_paw_pt = sample_ventral_paw(0.08, 0.44, hip_pt)
+        fore_paw_pt = sample_ventral_paw(0.45, 0.73, shoulder_pt)
+
+        spine_chain = [tail_tip, tail_mid, tail_base, hip_pt, spine_mid, shoulder_pt, head_pt, nose_pt]
+
+        # Check if the anterior head/snout region pitches downward compared to the thoracic/shoulder line
+        head_pitch_down = bool(snout_pitched_down)
+        if (nose_pt[1] - shoulder_pt[1] >= 4 and head_pt[1] - spine_mid[1] >= 4) or len(tx) > 20:
+            if len(tx) > 20:
+                rel_x = (tx / max(1.0, float(torso_width))) if move_dir >= 0 else (1.0 - tx / max(1.0, float(torso_width)))
+                mid_mask = (rel_x >= 0.30) & (rel_x <= 0.65)
+                ant_mask = rel_x >= 0.78
+                if np.any(mid_mask) and np.any(ant_mask):
+                    mid_bottom_y = float(np.percentile(ty[mid_mask], 85))
+                    ant_bottom_y = float(np.percentile(ty[ant_mask], 85))
+                    ant_top_y = float(np.percentile(ty[ant_mask], 15))
+                    mid_top_y = float(np.percentile(ty[mid_mask], 15))
+                    if (ant_bottom_y - mid_bottom_y >= 4.2) and (ant_top_y - mid_top_y >= 3.2):
+                        head_pitch_down = True
+
+        return {
+            "torso_left_x": int(torso_left_x),
+            "torso_right_x": int(torso_right_x),
+            "torso_width": int(torso_width),
+            "move_dir": float(move_dir),
+            "tail_tip": tail_tip,
+            "tail_base": tail_base,
+            "hip_pt": hip_pt,
+            "spine_mid": spine_mid,
+            "shoulder_pt": shoulder_pt,
+            "head_pt": head_pt,
+            "nose_pt": nose_pt,
+            "hind_paw_pt": hind_paw_pt,
+            "fore_paw_pt": fore_paw_pt,
+            "spine_chain": spine_chain,
+            "head_pitch_down": bool(head_pitch_down),
+        }
+
+    @staticmethod
+    def _draw_rodent_skeleton(disp, anat, offset_x=0, offset_y=0):
+        """Renders the articulated 9-point rodent skeleton (tail, arched spine, head, snout, forelimb, hindlimb)."""
+        if anat is None:
+            return
+        ox, oy = int(offset_x), int(offset_y)
+
+        def sh(pt):
+            return (int(pt[0]) + ox, int(pt[1]) + oy)
+
+        # 1. Draw Hindlimb & Forelimb vectors first (underneath spine joints)
+        if "hip_pt" in anat and "hind_paw_pt" in anat:
+            p_hip, p_hpaw = sh(anat["hip_pt"]), sh(anat["hind_paw_pt"])
+            cv2.line(disp, p_hip, p_hpaw, (0, 140, 255), 2, cv2.LINE_AA)
+            cv2.circle(disp, p_hpaw, 4, (0, 100, 255), -1, cv2.LINE_AA)
+        if "shoulder_pt" in anat and "fore_paw_pt" in anat:
+            p_sh, p_fpaw = sh(anat["shoulder_pt"]), sh(anat["fore_paw_pt"])
+            cv2.line(disp, p_sh, p_fpaw, (80, 255, 160), 2, cv2.LINE_AA)
+            cv2.circle(disp, p_fpaw, 4, (0, 230, 140), -1, cv2.LINE_AA)
+
+        # 2. Draw Axial Spine Chain (TailTip -> TailBase -> Hip -> SpineMid -> Shoulder -> Head -> Nose)
+        chain = anat.get("spine_chain")
+        if not chain:
+            chain = [
+                anat.get("tail_base", (0, 0)),
+                anat.get("hip_pt", (0, 0)),
+                anat.get("shoulder_pt", (0, 0)),
+                anat.get("nose_pt", (0, 0)),
+            ]
+        pts_global = [sh(pt) for pt in chain]
+        for i_p in range(len(pts_global) - 1):
+            if pts_global[i_p] == pts_global[i_p + 1]:
+                continue
+            bone_col = (185, 185, 185) if i_p == 0 and len(pts_global) >= 6 else (255, 225, 0)
+            cv2.line(disp, pts_global[i_p], pts_global[i_p + 1], bone_col, 2, cv2.LINE_AA)
+
+        # 3. Draw Joint Keypoints
+        joint_styles = [
+            ("tail_tip", (160, 160, 160), 3),
+            ("tail_base", (200, 200, 200), 4),
+            ("hip_pt", (0, 165, 255), 5),
+            ("spine_mid", (255, 200, 0), 4),
+            ("shoulder_pt", (0, 255, 255), 5),
+            ("head_pt", (255, 120, 255), 4),
+            ("nose_pt", (255, 0, 255), 5),
+        ]
+        for j_key, j_col, j_rad in joint_styles:
+            if j_key in anat:
+                pt_g = sh(anat[j_key])
+                cv2.circle(disp, pt_g, j_rad, j_col, -1, cv2.LINE_AA)
+                cv2.circle(disp, pt_g, j_rad, (20, 20, 20), 1, cv2.LINE_AA)
+
+    def _anatomical_dip_mask(
+        self, mouse_mask, fault_y_or_curve, bbox, previous_bbox, inv_ladder_mask, anatomy=None
+    ):
+        """
+        Gates the below-rung mask to the active torso+head corridor (excluding the tail behind the rump)
+        without creating a blind spot between the hindlimb and forelimb zones.
+        """
+        mh, mw = mouse_mask.shape[:2]
+        if isinstance(fault_y_or_curve, np.ndarray) and fault_y_or_curve.ndim == 1:
+            fault_curve = np.clip(fault_y_or_curve[:mw], 0, mh - 1).astype(np.int32)
+        else:
+            fault_curve = np.full(mw, int(fault_y_or_curve), dtype=np.int32)
+
+        if anatomy is None:
+            anatomy = self._extract_rodent_anatomy(mouse_mask, fault_curve, bbox, previous_bbox)
+        if anatomy is None:
+            return mouse_mask
+
+        t_left = anatomy["torso_left_x"]
+        t_right = anatomy["torso_right_x"]
+        move_dir = anatomy["move_dir"]
+
+        # Allow the continuous limb + snout corridor under the tail-trimmed body,
+        # while cutting off the tail behind the rump so tail sag never triggers false foot faults.
+        if move_dir >= 0:
+            active_x1 = max(0, t_left - 4)
+            active_x2 = min(mw, t_right + 12)
+        else:
+            active_x1 = max(0, t_left - 12)
+            active_x2 = min(mw, t_right + 4)
+
+        spotlight = np.zeros_like(mouse_mask)
+        if active_x2 > active_x1:
+            spotlight[:, active_x1:active_x2] = 255
+
+        rows = np.arange(mh, dtype=np.int32)[:, None]
+        below_fault = (rows >= fault_curve[None, :]).astype(np.uint8) * 255
+        paw_zone = cv2.bitwise_and(mouse_mask, cv2.bitwise_and(spotlight, below_fault))
+
+        gated_mask = cv2.bitwise_and(
+            mouse_mask, cv2.bitwise_or(cv2.bitwise_not(below_fault), paw_zone)
+        )
+        return gated_mask
+
+    def _check_real_dip_below_line(
+        self, final_mouse_mask, fault_y_or_curve, crop=None, bbox=None,
+        previous_bbox=None, inv_ladder_mask=None, move_dir=1.0, return_meta=False,
+        skin_map=None, valid_x_bounds=None
+    ):
+        """
+        Detects and anatomically classifies below-line events in real time:
+        - Rejects flat horizontal plexiglass reflections (`sw > sh * 2.0`) and detached rod tips.
+        - Extracts anatomical position along the tail-trimmed torso core, paw skin chromaticity,
+          and head pitch to immediately distinguish PAW slips (`MELLSŐ/HÁTSÓ LÁB`) from
+          NOSE exploration (`ORR (Exploráció)`) and `HIND_TAIL`.
+        - Prioritizes genuine PAW slips if both a nose poke and a paw slip occur simultaneously!
         """
         mh, mw = final_mouse_mask.shape[:2]
-
         if isinstance(fault_y_or_curve, np.ndarray) and fault_y_or_curve.ndim == 1:
-            row_grid = np.arange(mh)[:, None]
-            below_mask = (row_grid >= fault_y_or_curve[None, :mw]).astype(np.uint8) * 255
-            below_zone = cv2.bitwise_and(final_mouse_mask, below_mask)
-            if cv2.countNonZero(below_zone) < 42:
-                return False, 0, 0, 1.0, 0.0
+            fault_curve = np.clip(fault_y_or_curve[:mw], 0, mh - 1).astype(np.int32)
+        else:
+            fault_curve = np.full(mw, int(fault_y_or_curve), dtype=np.int32)
 
-            sub_contours, _ = cv2.findContours(below_zone, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            best_dip = None
-            max_depth = -1
+        anatomy = self._extract_rodent_anatomy(
+            final_mouse_mask, fault_curve, bbox, previous_bbox=previous_bbox, move_dir=move_dir
+        )
+        if crop is not None and bbox is not None:
+            gated_mouse_mask = self._anatomical_dip_mask(
+                final_mouse_mask, fault_curve, bbox, previous_bbox, inv_ladder_mask, anatomy=anatomy
+            )
+        else:
+            gated_mouse_mask = final_mouse_mask
 
-            for sc in sub_contours:
-                if cv2.contourArea(sc) >= 42:
-                    _, _, sw, sh = cv2.boundingRect(sc)
-                    # Reject flat horizontal shelf/edge artifacts!
-                    if sw > sh * 2.1:
-                        continue
-                    pts = sc.reshape(-1, 2)
-                    xs = np.clip(pts[:, 0], 0, mw - 1)
-                    ys = pts[:, 1]
-                    depths = ys - fault_y_or_curve[xs]
-                    max_idx = int(np.argmax(depths))
-                    depth_val = int(depths[max_idx])
-                    if depth_val >= 6 and depth_val > max_depth:
-                        max_depth = depth_val
-                        dip_x_local = int(xs[max_idx])
-                        dip_y_local = int(ys[max_idx])
-                        aspect = float(sw) / max(1.0, float(sh))
-                        best_dip = (True, dip_x_local, dip_y_local, aspect, float(depth_val))
+        row_grid = np.arange(mh)[:, None]
+        below_mask = (row_grid >= fault_curve[None, :mw]).astype(np.uint8) * 255
+        if valid_x_bounds is not None:
+            vx1, vx2 = max(0, int(valid_x_bounds[0])), min(mw, int(valid_x_bounds[1]))
+            if vx1 > 0:
+                below_mask[:, :vx1] = 0
+            if vx2 < mw:
+                below_mask[:, vx2:] = 0
+        below_zone = cv2.bitwise_and(gated_mouse_mask, below_mask)
 
-            return best_dip if best_dip is not None else (False, 0, 0, 1.0, 0.0)
-
-        fault_y_local = int(fault_y_or_curve)
-        if fault_y_local >= mh:
+        empty_meta = {
+            "dlc_part": "MANCS (Lábhiba)",
+            "dlc_code": "PAW",
+            "rel_pos_norm": 0.5,
+            "paw_skin_score": 0.0,
+            "head_pitch_down": False,
+            "anatomy": anatomy,
+        }
+        if cv2.countNonZero(below_zone) < 12:
+            if return_meta:
+                return False, 0, 0, 1.0, 0.0, empty_meta
             return False, 0, 0, 1.0, 0.0
 
-        below_zone = final_mouse_mask[fault_y_local:, :]
-        if cv2.countNonZero(below_zone) < 42:
-            return False, 0, 0, 1.0, 0.0
+        if skin_map is None and crop is not None:
+            skin_map = self._compute_skin_chromaticity(crop)
+        gray_eff = None
+        if crop is not None:
+            crop_g = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+            if skin_map is not None:
+                gray_eff = np.clip(crop_g.astype(np.float32) - 1.8 * skin_map, 0, 255).astype(np.uint8)
+            else:
+                gray_eff = crop_g
 
         sub_contours, _ = cv2.findContours(below_zone, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        best_dip = None
-        max_depth = -1
+
+        best_candidate = None
+        best_priority_score = float("-inf")
+
+        t_left = anatomy["torso_left_x"] if anatomy else (bbox[0] if bbox else 0)
+        t_width = max(22.0, float(anatomy["torso_width"] if anatomy else (bbox[2] if bbox else 60)))
+        eff_dir = anatomy["move_dir"] if anatomy else move_dir
+        head_pitch = anatomy["head_pitch_down"] if anatomy else False
 
         for sc in sub_contours:
-            if cv2.contourArea(sc) >= 42:
-                _, _, sw, sh = cv2.boundingRect(sc)
-                if sw > sh * 2.1:
-                    continue
-                pts = sc.reshape(-1, 2)
-                max_idx = int(np.argmax(pts[:, 1]))
-                depth_y = int(pts[max_idx, 1])
-                if depth_y >= 6 and depth_y > max_depth:
-                    max_depth = depth_y
-                    dip_x_local = int(pts[max_idx, 0])
-                    dip_y_local = fault_y_local + depth_y
-                    aspect = float(sw) / max(1.0, float(sh))
-                    best_dip = (True, dip_x_local, dip_y_local, aspect, float(depth_y))
+            c_area = cv2.contourArea(sc)
+            if c_area < 12:
+                continue
+            sx, sy, sw, sh = cv2.boundingRect(sc)
+            # Reject flat horizontal shelf/edge artifacts!
+            if sw > sh * 2.0:
+                continue
 
-        return best_dip if best_dip is not None else (False, 0, 0, 1.0, 0.0)
+            pts = sc.reshape(-1, 2)
+            xs = np.clip(pts[:, 0], 0, mw - 1)
+            ys = pts[:, 1]
+            depths = ys - fault_curve[xs]
+            max_idx = int(np.argmax(depths))
+            depth_val = int(depths[max_idx])
+            if depth_val < 5:
+                continue
+
+            dip_x_local = int(xs[max_idx])
+            dip_y_local = int(ys[max_idx])
+
+            skin_score = 0.0
+            if skin_map is not None:
+                patch_skin = skin_map[sy:min(mh, sy + sh), sx:min(mw, sx + sw)]
+                if patch_skin.size > 0:
+                    skin_score = float(np.percentile(patch_skin, 80))
+
+            # Verify vertical continuity across the fault line (rejects floating rod tips / blemishes separated by bright air)
+            if gray_eff is not None:
+                f_y_at_dip = int(fault_curve[dip_x_local])
+                cy1, cy2 = max(0, f_y_at_dip - 10), min(mh, f_y_at_dip + 1)
+                cx1, cx2 = max(0, dip_x_local - 5), min(mw, dip_x_local + 6)
+                if cy2 > cy1 and cx2 > cx1:
+                    cross_band = gray_eff[cy1:cy2, cx1:cx2]
+                    row_min_g = np.min(cross_band, axis=1)
+                    neck_max_g = int(np.max(row_min_g))
+                    if neck_max_g > 170:
+                        if skin_score < 14.0 or float(np.percentile(row_min_g, 75)) > 165.0:
+                            continue
+
+            # Check wedge shape (nose pokes are wider at the fault line than at the tip)
+            top_pts_x = xs[ys <= ( np.min(ys) + max(2, int(sh * 0.35)) )]
+            top_w = float(np.max(top_pts_x) - np.min(top_pts_x) + 1) if len(top_pts_x) > 0 else float(sw)
+            aspect = max(float(sw), top_w) / max(1.0, float(sh))
+
+            if eff_dir >= 0:
+                rel_pos_norm = (dip_x_local - t_left) / t_width
+            else:
+                rel_pos_norm = ((t_left + t_width) - dip_x_local) / t_width
+
+            part_label, part_code = DLCAddonManager.classify_dip_features(
+                rel_pos_norm, aspect, float(depth_val), skin_score, head_pitch
+            )
+
+            # Prioritize true PAW foot faults over simultaneous nose/tail pokes
+            type_bonus = 25.0 if part_code == "PAW" else (5.0 if part_code == "NOSE" else 0.0)
+            priority_score = type_bonus + float(depth_val) + 0.15 * skin_score
+
+            if priority_score > best_priority_score:
+                best_priority_score = priority_score
+                meta = {
+                    "dlc_part": part_label,
+                    "dlc_code": part_code,
+                    "rel_pos_norm": float(rel_pos_norm),
+                    "paw_skin_score": float(skin_score),
+                    "head_pitch_down": bool(head_pitch),
+                    "torso_left_x": int(t_left),
+                    "torso_width": int(t_width),
+                    "move_dir": float(eff_dir),
+                    "anatomy": anatomy,
+                }
+                best_candidate = (True, dip_x_local, dip_y_local, aspect, float(depth_val), meta)
+
+        if best_candidate is None:
+            if return_meta:
+                return False, 0, 0, 1.0, 0.0, empty_meta
+            return False, 0, 0, 1.0, 0.0
+
+        if return_meta:
+            return best_candidate
+        return best_candidate[:5]
 
     def _generate_heatmap_image(
         self, base_frame, trajectory_pts, valid_dips, title_text,
@@ -2774,8 +3652,9 @@ class PerVideoIDTrackerApp:
 
                 ladder_mask = self._create_ladder_mask(base_gray, ladder_t, fault_y_local=fault_y_local)
                 inv_ladder_mask = cv2.bitwise_not(ladder_mask)
-                detected, mask, bbox = self._detect_mouse_on_crop(
-                    crop, base_gray, inv_ladder_mask, rw, rh, dark_t, diff_t, fault_y_local=fault_y_local
+                detected, mask, bbox, skin_map = self._detect_mouse_on_crop(
+                    crop, base_gray, inv_ladder_mask, rw, rh, dark_t, diff_t,
+                    fault_y_local=fault_y_local, return_skin=True
                 )
 
                 overlay = np.zeros_like(crop)
@@ -2790,9 +3669,23 @@ class PerVideoIDTrackerApp:
                     bx, by, bw, bh = bbox
                     cv2.rectangle(disp, (rx + bx, ry + by), (rx + bx + bw, ry + by + bh), (0, 255, 0), 2)
 
-                    is_dip, dip_x_loc, dip_y_loc, _, _ = self._check_real_dip_below_line(mask, fault_y_local)
+                    is_dip, dip_x_loc, dip_y_loc, _, _, dip_meta = self._check_real_dip_below_line(
+                        mask, fault_y_local, crop=crop, bbox=bbox, inv_ladder_mask=inv_ladder_mask,
+                        return_meta=True, skin_map=skin_map
+                    )
+                    anat = dip_meta.get("anatomy") if dip_meta else None
+                    if anat is not None:
+                        self._draw_rodent_skeleton(disp, anat, offset_x=rx, offset_y=ry)
+
                     if is_dip:
-                        cv2.circle(disp, (rx + dip_x_loc, ry + dip_y_loc), 12, (0, 0, 255), 3)
+                        d_code = dip_meta.get("dlc_code", "PAW")
+                        d_part = dip_meta.get("dlc_part", "MANCS")
+                        dip_col = (0, 0, 255) if d_code == "PAW" else ((255, 220, 0) if d_code == "NOSE" else (180, 105, 255))
+                        cv2.circle(disp, (rx + dip_x_loc, ry + dip_y_loc), 12, dip_col, 3)
+                        cv2.putText(
+                            disp, d_part, (rx + dip_x_loc - 35, ry + dip_y_loc + 24),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.48, dip_col, 2
+                        )
 
                 cv2.rectangle(disp, (rx, ry), (rx + rw, ry + rh), (255, 140, 0), 2)
                 cv2.line(disp, (left_gate_x, ry), (left_gate_x, ry + rh), (255, 50, 50), 2)
@@ -2914,9 +3807,14 @@ class PerVideoIDTrackerApp:
         except Exception:
             pass
 
+        try:
+            use_yolo_fusion = bool(self.var_yolo_fusion.get())
+        except (RuntimeError, tk.TclError):
+            use_yolo_fusion = True
+
         self.log(
             f"\n---> TURBO Engine started ({max_workers} threads, Stride={frame_stride}, "
-            f"GPU OpenCL={'ON' if gpu_active else 'OFF'}, YOLO+OpenCV Spatial Gate={'ON' if self.var_yolo_fusion.get() else 'OFF'}) | Scale: {px_per_cm:.2f} px/cm"
+            f"GPU OpenCL={'ON' if gpu_active else 'OFF'}, YOLO+OpenCV Spatial Gate={'ON' if use_yolo_fusion else 'OFF'}) | Scale: {px_per_cm:.2f} px/cm"
         )
 
         def process_single_video(item):
@@ -2924,6 +3822,7 @@ class PerVideoIDTrackerApp:
                 return
 
             uid = item["uid"]
+            self.hybrid_locator.reset_stream(uid)
             video_path = item["path"]
             video_name = item["name"]
             animal_id = item["id"]
@@ -2971,14 +3870,16 @@ class PerVideoIDTrackerApp:
 
             ladder_mask = self._create_ladder_mask(base_gray, ladder_t, fault_y_local=fault_y_local)
             inv_ladder_mask = cv2.bitwise_not(ladder_mask)
+            base_smooth_static = cv2.GaussianBlur(base_gray, (3, 3), 0)
 
             kalman = MouseKalmanTracker() if use_kalman else None
             rung_pts = self.auto_engine.extract_rung_keypoints(base_gray, max(10, fault_y_local - 12), ladder_t)
             elastic_tracker = ElasticLadderTracker(base_gray, inv_ladder_mask, rung_pts, fault_y_local) if use_kalman else None
             last_bbox_local = None
+            bbox_miss_count = 0
 
-            u_base_smooth = cv2.GaussianBlur(cv2.UMat(base_gray), (3, 3), 0) if gpu_active else None
-            u_inv_ladder = cv2.UMat(inv_ladder_mask) if gpu_active else None
+            u_base_smooth = None
+            u_inv_ladder = None
 
             stride_pad = 35 * (frame_stride - 1)
             start_x1_loc = max(0, (left_gate_x - 120) - v_rx)
@@ -3005,9 +3906,9 @@ class PerVideoIDTrackerApp:
             cooldown_sec_accum = 0.0
 
             dip_events = []
-            in_dip_event = False
-            last_dip_sec = -999.0
-            last_dip_x = -999
+            in_dip_event_by_type = {"PAW": False, "NOSE": False, "HIND_TAIL": False}
+            last_dip_sec_by_type = {"PAW": -999.0, "NOSE": -999.0, "HIND_TAIL": -999.0}
+            last_dip_x_by_type = {"PAW": -999, "NOSE": -999, "HIND_TAIL": -999}
 
             freeze_events = []
             current_still_sec = 0.0
@@ -3043,18 +3944,33 @@ class PerVideoIDTrackerApp:
                         active_base_gray, active_inv_ladder, active_fault_target = elastic_tracker.update(
                             crop_gray, mouse_bbox_local=last_bbox_local
                         )
+                        active_base_smooth = (
+                            base_smooth_static if active_base_gray is base_gray
+                            else cv2.GaussianBlur(active_base_gray, (3, 3), 0)
+                        )
                     else:
                         active_base_gray = base_gray
                         active_inv_ladder = inv_ladder_mask
                         active_fault_target = fault_y_local
+                        active_base_smooth = base_smooth_static
 
-                    mouse_detected, final_mouse_mask, bbox = self._detect_mouse_on_crop(
+                    # Only use previous_bbox stationary rescue during an active run so static table spots never self-lock
+                    previous_bbox_local = last_bbox_local if state == "RUNNING" else None
+                    mouse_detected, final_mouse_mask, bbox, skin_idx_map = self._detect_mouse_on_crop(
                         crop, active_base_gray, active_inv_ladder, v_rw, v_rh, dark_t, diff_t,
                         fault_y_local=fault_y_local,
                         use_umat=gpu_active, u_base_smooth=u_base_smooth, u_inv_ladder=u_inv_ladder,
-                        mog2_subtractor=None
+                        mog2_subtractor=None, stream_id=uid, frame_idx=frame_idx,
+                        ai_max_age=max(12, frame_stride * 12), previous_bbox=previous_bbox_local,
+                        base_smooth_cached=active_base_smooth, return_skin=True, use_yolo=use_yolo_fusion
                     )
-                    last_bbox_local = bbox if mouse_detected else None
+                    if mouse_detected:
+                        last_bbox_local = bbox
+                        bbox_miss_count = 0
+                    else:
+                        bbox_miss_count += 1
+                        if bbox_miss_count > max(4, frame_stride * 4):
+                            last_bbox_local = None
 
                     mouse_x_global = None
                     mouse_y_center_global = None
@@ -3080,9 +3996,9 @@ class PerVideoIDTrackerApp:
                             current_run_roi.fill(255)
 
                             dip_events = []
-                            in_dip_event = False
-                            last_dip_sec = -999.0
-                            last_dip_x = -999
+                            in_dip_event_by_type = {"PAW": False, "NOSE": False, "HIND_TAIL": False}
+                            last_dip_sec_by_type = {"PAW": -999.0, "NOSE": -999.0, "HIND_TAIL": -999.0}
+                            last_dip_x_by_type = {"PAW": -999, "NOSE": -999, "HIND_TAIL": -999}
 
                             freeze_events = []
                             current_still_sec = 0.0
@@ -3110,27 +4026,48 @@ class PerVideoIDTrackerApp:
                                     zone_Moving_times[2] += dt
 
                             paint_mask = cv2.morphologyEx(final_mouse_mask, cv2.MORPH_CLOSE, self.kernel_fill)
-                            m_bool = paint_mask == 255
-                            current_run_roi[m_bool] = np.minimum(current_run_roi[m_bool], crop[m_bool])
+                            cv2.copyTo(cv2.min(current_run_roi, crop), paint_mask, current_run_roi)
 
-                            is_dip, dip_x_loc, dip_y_loc, dip_aspect, dip_depth = self._check_real_dip_below_line(
-                                final_mouse_mask, active_fault_target
+                            # Estimate current locomotion direction from recent trajectory
+                            curr_move_dir = 1.0
+                            if len(trajectory) >= 2:
+                                recent_dx = trajectory[-1][0] - trajectory[max(0, len(trajectory) - 6)][0]
+                                if abs(recent_dx) > 3:
+                                    curr_move_dir = 1.0 if recent_dx > 0 else -1.0
+
+                            valid_ladder_bounds = (
+                                max(int(v_rw * 0.050), (left_gate_x - 95) - v_rx),
+                                min(int(v_rw * 0.915), (right_gate_x + 95) - v_rx),
+                            )
+                            is_dip, dip_x_loc, dip_y_loc, dip_aspect, dip_depth, dip_meta = self._check_real_dip_below_line(
+                                final_mouse_mask, active_fault_target, crop=crop, bbox=bbox,
+                                previous_bbox=previous_bbox_local, inv_ladder_mask=active_inv_ladder,
+                                move_dir=curr_move_dir, return_meta=True, skin_map=skin_idx_map,
+                                valid_x_bounds=valid_ladder_bounds
                             )
                             if is_dip:
+                                dip_code = dip_meta.get("dlc_code", "PAW")
+                                dip_part = dip_meta.get("dlc_part", "MANCS (Lábhiba)")
+                                for other_k in in_dip_event_by_type:
+                                    if other_k != dip_code:
+                                        in_dip_event_by_type[other_k] = False
+
                                 dip_x_glob = v_rx + dip_x_loc
                                 dip_y_glob = v_ry + dip_y_loc
-                                time_since_last_dip = current_sec - last_dip_sec
-                                dist_from_last_dip = abs(dip_x_glob - last_dip_x)
+                                time_since_last_dip = current_sec - last_dip_sec_by_type.get(dip_code, -999.0)
+                                dist_from_last_dip = abs(dip_x_glob - last_dip_x_by_type.get(dip_code, -999))
 
-                                if (not in_dip_event) and (time_since_last_dip >= dip_cooldown_sec) and (
+                                if (not in_dip_event_by_type.get(dip_code, False)) and (time_since_last_dip >= dip_cooldown_sec) and (
                                     dist_from_last_dip >= dip_min_dist_px or time_since_last_dip >= dip_cooldown_sec * 1.8
                                 ):
-                                    in_dip_event = True
-                                    last_dip_sec = current_sec
-                                    last_dip_x = dip_x_glob
+                                    in_dip_event_by_type[dip_code] = True
+                                    last_dip_sec_by_type[dip_code] = current_sec
+                                    last_dip_x_by_type[dip_code] = dip_x_glob
 
                                     body_left_glob = v_rx + bbox[0]
                                     body_width_px = max(25, bbox[2])
+                                    torso_left_glob = v_rx + dip_meta.get("torso_left_x", bbox[0])
+                                    torso_width_px = max(22, dip_meta.get("torso_width", bbox[2]))
 
                                     dip_events.append({
                                         "x": dip_x_glob,
@@ -3140,14 +4077,22 @@ class PerVideoIDTrackerApp:
                                         "dip_depth": dip_depth,
                                         "body_left_x": body_left_glob,
                                         "body_width": body_width_px,
+                                        "torso_left_x": torso_left_glob,
+                                        "torso_width": torso_width_px,
+                                        "paw_skin_score": dip_meta.get("paw_skin_score", 0.0),
+                                        "head_pitch_down": dip_meta.get("head_pitch_down", False),
+                                        "move_dir": dip_meta.get("move_dir", curr_move_dir),
+                                        "anatomy": dip_meta.get("anatomy"),
+                                        "roi_offset": (v_rx, v_ry),
                                         "frame_buf": encode_frame_compressed(frame),
                                         "valid": True,
                                         "save_crop": False,
-                                        "dlc_part": "MANCS (Lábhiba)",
-                                        "dlc_code": "PAW"
+                                        "dlc_part": dip_part,
+                                        "dlc_code": dip_code
                                     })
                             else:
-                                in_dip_event = False
+                                for k_type in in_dip_event_by_type:
+                                    in_dip_event_by_type[k_type] = False
 
                             if prev_mouse_x is not None:
                                 if abs(mouse_x_global - prev_mouse_x) < (2.5 * frame_stride):
@@ -3226,9 +4171,11 @@ class PerVideoIDTrackerApp:
                                         "max_speed_cm_s": max_speed_cm_s
                                     })
 
+                                    paw_cnt_live = sum(1 for d_ev in dip_events if d_ev.get("dlc_code") == "PAW")
+                                    nose_cnt_live = sum(1 for d_ev in dip_events if d_ev.get("dlc_code") == "NOSE")
                                     self.log(
                                         f"   ✔ [#{animal_id}] Run #{run_count} DONE: "
-                                        f"Time={transit_time:.2f}s | Dips={len(dip_events)} | "
+                                        f"Time={transit_time:.2f}s | PawFaults={paw_cnt_live} | Explorations={nose_cnt_live} | "
                                         f"Speed={avg_speed_cm_s:.1f} cm/s"
                                     )
 
@@ -3241,6 +4188,7 @@ class PerVideoIDTrackerApp:
                                 cooldown_sec_accum = 0.0
                         else:
                             if (current_sec - last_seen_time) > 2.0:
+                                run_count = max(0, run_count - 1)
                                 set_state("WAIT_FOR_LEFT_START", current_sec, "Lost track >2s, resetting...")
 
                     elif state == "COOLDOWN":
@@ -3256,6 +4204,7 @@ class PerVideoIDTrackerApp:
             finally:
                 reader.stop()
                 cap.release()
+                self.hybrid_locator.reset_stream(uid)
 
             master_white_canvas = np.full_like(first_frame, 255)
             master_white_canvas[v_ry:v_ry + v_rh, v_rx:v_rx + v_rw] = master_roi_canvas
@@ -3287,10 +4236,13 @@ class PerVideoIDTrackerApp:
                 self.dlc_addon.export_training_dataset(self.pending_results, os.path.join(self.output_base_dir, "DLC_Tanitokepek_Export"))
 
         total_dips_found = sum(len(r["dips"]) for res in self.pending_results for r in res["runs"])
-        if self.is_running and self.var_enable_review.get() and total_dips_found > 0:
-            self.root.after(0, self.open_review_window)
-        else:
-            self.root.after(0, self.finalize_and_export_all)
+        try:
+            if self.is_running and self.var_enable_review.get() and total_dips_found > 0:
+                self.root.after(0, self.open_review_window)
+            else:
+                self.root.after(0, self.finalize_and_export_all)
+        except (RuntimeError, tk.TclError):
+            self.finalize_and_export_all()
 
     # ==========================================================================
     # INTERACTIVE DIP INSPECTOR WITH SCROLL-WHEEL ZOOM & DRAG PAN
@@ -3398,6 +4350,11 @@ class PerVideoIDTrackerApp:
             fh, fw = disp.shape[:2]
 
             cv2.line(disp, (rx, fault_y_glob), (rx + rw, fault_y_glob), (0, 0, 255), 2)
+
+            anat = d.get("anatomy")
+            ox, oy = d.get("roi_offset", (rx, ry))
+            if anat is not None:
+                self._draw_rodent_skeleton(disp, anat, offset_x=ox, offset_y=oy)
 
             part_str = d.get("dlc_part", "MANCS (Lábhiba)")
             dx, dy = int(d["x"]), int(d["y"])
@@ -3668,9 +4625,14 @@ class PerVideoIDTrackerApp:
         self.log("\n💾 Exporting CSV tables and velocity heatmaps in background...")
         threading.Thread(target=self._export_worker, daemon=True).start()
 
-    def _fmt_num(self, val, fmt_str="{:.2f}"):
+    def _fmt_num(self, val, fmt_str="{:.2f}", use_comma=None):
         s = fmt_str.format(val)
-        if self.var_decimal.get().startswith(","):
+        if use_comma is None:
+            try:
+                use_comma = self.var_decimal.get().startswith(",")
+            except (RuntimeError, tk.TclError):
+                use_comma = True
+        if use_comma:
             return s.replace(".", ",")
         return s
 
@@ -3724,6 +4686,7 @@ class PerVideoIDTrackerApp:
 
                 all_video_trajectories = []
                 all_video_valid_dips = []
+                video_csv_rows = []
 
                 for r in runs:
                     run_count = r["run_num"]
@@ -3753,6 +4716,10 @@ class PerVideoIDTrackerApp:
                             snap = decode_frame_compressed(d["frame_buf"])
                             if snap is not None:
                                 cv2.line(snap, (rx, ry + fault_y_local), (rx + rw, ry + fault_y_local), (0, 0, 255), 1)
+                                anat = d.get("anatomy")
+                                ox, oy = d.get("roi_offset", (rx, ry))
+                                if anat is not None:
+                                    self._draw_rodent_skeleton(snap, anat, offset_x=ox, offset_y=oy)
                                 cv2.circle(snap, (d["x"], d["y"]), 16, (0, 0, 255), 3)
                                 part_lbl = d.get("dlc_part", "")
                                 cv2.putText(
@@ -3861,17 +4828,17 @@ class PerVideoIDTrackerApp:
                         fn(zone_times[1]), zone_dips[1], zone_freezes[1],
                         fn(zone_times[2]), zone_dips[2], zone_freezes[2]
                     ]
+                    video_csv_rows.append(row_data)
 
-                    csv_exists = os.path.exists(csv_filename)
-                    with open(csv_filename, mode='a', newline='', encoding='utf-8-sig') as f:
-                        writer = csv.writer(f, delimiter=';')
-                        if not csv_exists:
-                            writer.writerow(csv_headers)
-                        writer.writerow(row_data)
+                with open(csv_filename, mode='w', newline='', encoding='utf-8-sig') as f_vid:
+                    writer_vid = csv.writer(f_vid, delimiter=';')
+                    writer_vid.writerow(csv_headers)
+                    writer_vid.writerows(video_csv_rows)
 
-                    with open(master_csv, mode='a', newline='', encoding='utf-8-sig') as f2:
-                        writer2 = csv.writer(f2, delimiter=';')
-                        writer2.writerow(row_data)
+                if video_csv_rows:
+                    with open(master_csv, mode='a', newline='', encoding='utf-8-sig') as f_master:
+                        writer_master = csv.writer(f_master, delimiter=';')
+                        writer_master.writerows(video_csv_rows)
 
                 saved_runs_for_video = len(runs)
                 if saved_runs_for_video > 0:
@@ -3909,7 +4876,10 @@ class PerVideoIDTrackerApp:
         except Exception as e:
             self.log(f"❌ Export error: {e}")
         finally:
-            self.root.after(0, self.reset_ui)
+            try:
+                self.root.after(0, self.reset_ui)
+            except (RuntimeError, tk.TclError):
+                pass
 
     def stop_analysis(self):
         self.is_running = False
