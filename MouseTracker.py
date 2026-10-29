@@ -239,6 +239,68 @@ TRANSLATIONS = {
         "tt_change_dir": "A kimeneti CSV fájlok és hőtérképek célkönyvtárának módosítása.",
         "tt_open_dir": "Az eredmények mappájának megnyitása a fájlkezelőben.",
         "tt_train_ai": "Egyedi 9-pontos YOLOv8-Pose modell (mouse_pose_ai.pt) automatikus tanítása a videókból.",
+        "review_title": "Kinematikai Esemény-Ellenőrző Munkaállomás",
+        "review_banner_help": "Navigáció: [↑]/[↓] vagy [A]/[D] | Érvényesség: [Szóköz] | Testrész: [T] | Képkivágás mentése: [S] | Zoom: [Z] / [R] | Exportálás: [Enter]",
+        "events_table_title": "Detektált Események Listája",
+        "inspector_canvas_title": "Létra és Alany Részletes Előnézet",
+        "btn_prev": "◀ Előző (A)",
+        "btn_next": "Következő (D) ▶",
+        "btn_toggle_valid": "Érvényesség váltása [Szóköz]",
+        "btn_cycle_part": "Testrész váltása [T]",
+        "btn_toggle_crop": "Képkivágás mentése [S]",
+        "btn_confirm_export": "✔ Jóváhagyás & Exportálás (Enter)",
+        "col_rev_id": "Alany ID",
+        "col_rev_run": "Futás",
+        "col_rev_sec": "Időpont",
+        "col_rev_part": "Testrész [T]",
+        "col_rev_valid": "Állapot",
+        "col_rev_save": "Kép [S]",
+        "val_valid": "ÉRVÉNYES",
+        "val_ignored": "KIZÁRVA",
+        "val_yes": "Igen",
+        "val_no": "Nem",
+        "btn_close": "Bezárás",
+        "btn_cancel": "Mégse (Esc)",
+        "app_window_title": "{app_name} v{version} — Tudományos Kinematikai és Viselkedéselemző Munkaállomás",
+        "preview_inspector_title": "Adathalmaz és Detektálási Előnézet",
+        "preview_trainer_title": "AI Modell Betanító Központ",
+        "badge_queue": "FELVÉTELEK",
+        "badge_controls": "VEZÉRLÉS",
+        "badge_log": "ÁLLAPOT & NAPLÓ",
+        "badge_inspector": "ELŐNÉZET",
+        "badge_trainer": "TRÉNING",
+        "badge_events": "ESEMÉNYEK",
+        "lbl_sample_counter": "Minta: {cur} / {tot}",
+        "status_waiting_samples": "Várakozás mintákra...",
+        "lbl_img_size": "Képméret / BBox:",
+        "lbl_model_type": "Modell típus:",
+        "val_model_type": "9-pontos Pose AI (Mancs fókusz)",
+        "sample_status_excluded": "❌ KIZÁRVA (A modell nem használja)",
+        "sample_status_valid": "✔ ÉRVÉNYES TANÍTÓ MINTA",
+        "tt_lang": "Nyelv váltása (Magyar / English)",
+        "tt_lock_lr": "Rögzíti a szigorú balról jobbra haladási irányt (kiküszöböli az orr és farok felcserélését).",
+        "tt_bidirectional": "Engedélyezi a kétirányú mozgáskövetést a teljes pályán.",
+        "tt_cooldown": "Két lábhiba közötti minimális időablak (másodperc).",
+        "tt_mindist": "Két különálló lábhiba közötti minimális távolság (pixel).",
+        "tt_threads": "Párhuzamos feldolgozó processzorszálak száma.",
+        "tt_load_prof": "Mentett kalibrációs profil (.json) betöltése a lemezről.",
+        "tt_save_prof": "Jelenlegi beállítások mentése JSON profilként.",
+        "tt_rescan_samples": "Videók újbóli átvizsgálása és minták kigyűjtése a beállítások alapján.",
+        "calib_win_title": "Kalibrációs Előnézet (Görgő=Zoom, Jobb gomb=Mozgatás, Bal gomb=Kapu, ENTER=Indítás)",
+        "calib_tb_frame": "Képkocka",
+        "calib_tb_dark": "Fényerő Küszöb",
+        "calib_tb_diff": "Mozgás Küszöb",
+        "calib_tb_ladder": "Létra Maszk",
+        "calib_tb_fault": "Hibavonal %",
+        "calib_overlay_hint": "ZÖLD KAPU=Start | PIROS KAPU=Cél | PIROS VONAL=Hibavonal | ENTER=Indítás | R=Alaphelyzet",
+        "tt_rev_prev": "Ugrás az előző detektált lábhibára / eseményre [A]",
+        "tt_rev_next": "Ugrás a következő detektált lábhibára / eseményre [D]",
+        "tt_rev_valid": "Esemény érvényességének váltása: ÉRVÉNYES ↔ KIZÁRVA [Szóköz]",
+        "tt_rev_part": "Detektált testrész átminősítése (Mellső láb, Hátsó láb, Orr, Farok) [T]",
+        "tt_rev_crop": "Képkivágás pillanatkép mentése a megerősített eseményről [S]",
+        "tt_rev_export": "Összes eredmény véglegesítése, kinematikai táblázatok és hőtérképek exportálása [Enter]",
+        "tt_rev_zoom": "Nagyítás a hiba helyére (2.5×) [Z]",
+        "tt_rev_reset": "Nagyítás és pozíció visszaállítása alaphelyzetbe (1.0×) [R]",
     },
     "en": {
         "subtitle": "Professional Horizontal Ladder Kinematic & Behavioral Workstation",
@@ -347,6 +409,68 @@ TRANSLATIONS = {
         "tt_change_dir": "Select output directory for CSV tables and heatmaps.",
         "tt_open_dir": "Open active results directory in file manager.",
         "tt_train_ai": "Train a custom 9-keypoint YOLOv8-Pose model (mouse_pose_ai.pt) from videos.",
+        "review_title": "Kinematic Event Inspector & Verification Workstation",
+        "review_banner_help": "Navigation: [↑]/[↓] or [A]/[D] | Toggle Valid: [Space] | Cycle Body Part: [T] | Save Crop: [S] | Zoom: [Z] / [R] | Export: [Enter]",
+        "events_table_title": "Detected Events List",
+        "inspector_canvas_title": "Detailed Ladder & Rodent Inspector",
+        "btn_prev": "◀ Prev (A)",
+        "btn_next": "Next (D) ▶",
+        "btn_toggle_valid": "Toggle Valid [Space]",
+        "btn_cycle_part": "Cycle Body Part [T]",
+        "btn_toggle_crop": "Save Snapshot [S]",
+        "btn_confirm_export": "✔ Confirm & Export Metrics (Enter)",
+        "col_rev_id": "Subject ID",
+        "col_rev_run": "Run",
+        "col_rev_sec": "Time",
+        "col_rev_part": "Body Part [T]",
+        "col_rev_valid": "Status",
+        "col_rev_save": "Snap [S]",
+        "val_valid": "VALID",
+        "val_ignored": "IGNORED",
+        "val_yes": "Yes",
+        "val_no": "No",
+        "btn_close": "Close",
+        "btn_cancel": "Cancel (Esc)",
+        "app_window_title": "{app_name} v{version} — Scientific Kinematic & Behavioral Workstation",
+        "preview_inspector_title": "Dataset & Detection Inspector",
+        "preview_trainer_title": "AI Model Training Center",
+        "badge_queue": "DATA QUEUE",
+        "badge_controls": "CONTROLS",
+        "badge_log": "STATUS & LOG",
+        "badge_inspector": "INSPECTOR",
+        "badge_trainer": "TRAINER",
+        "badge_events": "EVENTS",
+        "lbl_sample_counter": "Sample: {cur} / {tot}",
+        "status_waiting_samples": "Waiting for samples...",
+        "lbl_img_size": "Image Size / BBox:",
+        "lbl_model_type": "Model Type:",
+        "val_model_type": "9-Keypoint Pose AI (Paw-Focused)",
+        "sample_status_excluded": "❌ EXCLUDED (Omitted from AI training)",
+        "sample_status_valid": "✔ VALID TRAINING SAMPLE",
+        "tt_lang": "Switch language (Hungarian / English)",
+        "tt_lock_lr": "Locks strict left-to-right heading per experimental protocol (prevents nose/tail inversions).",
+        "tt_bidirectional": "Enables bidirectional tracking across entire track.",
+        "tt_cooldown": "Minimum refractory time between consecutive foot slips (seconds).",
+        "tt_mindist": "Minimum spatial distance between distinct foot slips (pixels).",
+        "tt_threads": "Number of parallel worker CPU threads.",
+        "tt_load_prof": "Load saved calibration profile (.json) from disk.",
+        "tt_save_prof": "Save active calibration parameters to JSON profile.",
+        "tt_rescan_samples": "Rescan queued recordings and harvest fresh rodent samples.",
+        "calib_win_title": "Calibration Preview (Wheel=Zoom, RightDrag=Pan, LeftClick=Move Gate, ENTER=Start)",
+        "calib_tb_frame": "Frame",
+        "calib_tb_dark": "Brightness",
+        "calib_tb_diff": "Motion Diff",
+        "calib_tb_ladder": "Rung Mask",
+        "calib_tb_fault": "Fault Line %",
+        "calib_overlay_hint": "GREEN GATE=Start | RED GATE=Goal | RED LINE=Fault Line | ENTER=Start Analysis | R=Reset View",
+        "tt_rev_prev": "Jump to previous detected foot fault or event [A]",
+        "tt_rev_next": "Jump to next detected foot fault or event [D]",
+        "tt_rev_valid": "Toggle event validity: VALID ↔ IGNORED [Space]",
+        "tt_rev_part": "Cycle classified body part (Forepaw, Hindpaw, Snout, Tail) [T]",
+        "tt_rev_crop": "Save cropped image snapshot of this event [S]",
+        "tt_rev_export": "Confirm all events and export kinematic tables & heatmaps [Enter]",
+        "tt_rev_zoom": "Zoom into slip location (2.5×) [Z]",
+        "tt_rev_reset": "Reset zoom and position to fit overview (1.0×) [R]",
     }
 }
 
@@ -2859,6 +2983,7 @@ class PerVideoIDTrackerApp:
         )
         lbl.pack(side="left")
 
+        badge = None
         if badge_text:
             badge = tk.Label(
                 header_bar, text=badge_text, bg=P["bg_panel"], fg=P["text_muted"],
@@ -2869,7 +2994,7 @@ class PerVideoIDTrackerApp:
         divider = tk.Frame(inner, bg=P["border"], height=1)
         divider.pack(fill="x", pady=(0, 8))
 
-        return outer, inner, lbl
+        return outer, inner, lbl, badge
 
     def _build_ui(self):
         P = self.PALETTE
@@ -2971,8 +3096,8 @@ class PerVideoIDTrackerApp:
         center_workspace.pack(fill="both", expand=True)
 
         # LEFT PANEL: RECORDINGS & SUBJECT TABLE
-        list_outer, list_card, self.lbl_sec1 = self._create_section_card(
-            center_workspace, self.tr("sec1_title"), P["blue"], "DATA QUEUE"
+        list_outer, list_card, self.lbl_sec1, self.badge_sec1 = self._create_section_card(
+            center_workspace, self.tr("sec1_title"), P["blue"], self.tr("badge_queue")
         )
         list_outer.pack(side="left", fill="both", expand=True, padx=(0, 8), pady=(0, 8))
 
@@ -3028,10 +3153,10 @@ class PerVideoIDTrackerApp:
         self.tree.bind("<F2>", self.edit_animal_id)
 
         # RIGHT PANEL: PARAMETERS & EXECUTION DOCK
-        ctrl_outer, control_card, self.lbl_sec2 = self._create_section_card(
-            center_workspace, self.tr("sec2_title"), P["emerald"], "CONTROLS"
+        ctrl_outer, control_card, self.lbl_sec2, self.badge_sec2 = self._create_section_card(
+            center_workspace, self.tr("sec2_title"), P["emerald"], self.tr("badge_controls")
         )
-        ctrl_outer.configure(width=410)
+        ctrl_outer.configure(width=435)
         ctrl_outer.pack_propagate(False)
         ctrl_outer.pack(side="right", fill="y", pady=(0, 8))
 
@@ -3056,10 +3181,17 @@ class PerVideoIDTrackerApp:
         self.chk_yolo_fusion.pack(anchor="w", pady=1)
         ToolTip(self.chk_yolo_fusion, lambda: self.tr("tt_yolo"))
 
+        self.chk_lock_lr = ttk.Checkbutton(
+            chk_group, text=self.tr("chk_lock_lr"), variable=self.var_lock_lr_direction, style="Dark.TCheckbutton"
+        )
+        self.chk_lock_lr.pack(anchor="w", pady=1)
+        ToolTip(self.chk_lock_lr, lambda: self.tr("tt_lock_lr"))
+
         self.chk_bidirectional = ttk.Checkbutton(
             chk_group, text=self.tr("chk_bidirectional"), variable=self.var_bidirectional, style="Dark.TCheckbutton"
         )
         self.chk_bidirectional.pack(anchor="w", pady=1)
+        ToolTip(self.chk_bidirectional, lambda: self.tr("tt_bidirectional"))
 
         self.chk_rev = ttk.Checkbutton(
             chk_group, text=self.tr("chk_rev"), variable=self.var_enable_review, style="Dark.TCheckbutton"
@@ -3107,6 +3239,7 @@ class PerVideoIDTrackerApp:
             highlightthickness=1, highlightbackground=P["border"]
         )
         self.spin_cooldown_main.grid(row=0, column=3, sticky="e", padx=(4, 0), pady=(0, 6))
+        ToolTip(self.spin_cooldown_main, lambda: self.tr("tt_cooldown"))
 
         self.lbl_mindist_main = tk.Label(
             param_grid, text=self.tr("lbl_mindist"), bg=P["bg_panel"], fg=P["text_main"], font=(self.ui_font, 9)
@@ -3119,6 +3252,7 @@ class PerVideoIDTrackerApp:
             highlightthickness=1, highlightbackground=P["border"]
         )
         self.spin_mindist_main.grid(row=1, column=1, sticky="e", padx=(4, 12))
+        ToolTip(self.spin_mindist_main, lambda: self.tr("tt_mindist"))
 
         self.lbl_threads_main = tk.Label(
             param_grid, text=self.tr("lbl_threads"), bg=P["bg_panel"], fg=P["text_main"], font=(self.ui_font, 9)
@@ -3131,30 +3265,36 @@ class PerVideoIDTrackerApp:
             highlightthickness=1, highlightbackground=P["border"]
         )
         self.spin_threads_main.grid(row=1, column=3, sticky="e", padx=(4, 0))
+        ToolTip(self.spin_threads_main, lambda: self.tr("tt_threads"))
 
-        prof_row = tk.Frame(control_card, bg=P["bg_card"])
-        prof_row.pack(fill="x", pady=(0, 8))
+        prof_row1 = tk.Frame(control_card, bg=P["bg_card"])
+        prof_row1.pack(fill="x", pady=(0, 4))
 
         self.btn_load_prof_main = ttk.Button(
-            prof_row, text=self.tr("btn_load_prof"), command=self.load_calibration_json, style="Ghost.TButton"
+            prof_row1, text=self.tr("btn_load_prof"), command=self.load_calibration_json, style="Ghost.TButton"
         )
-        self.btn_load_prof_main.pack(side="left", padx=(0, 4))
+        self.btn_load_prof_main.pack(side="left", fill="x", expand=True, padx=(0, 3))
+        ToolTip(self.btn_load_prof_main, lambda: self.tr("tt_load_prof"))
 
         self.btn_save_prof_main = ttk.Button(
-            prof_row, text=self.tr("btn_save_prof"), command=self.save_calibration_json, style="Ghost.TButton"
+            prof_row1, text=self.tr("btn_save_prof"), command=self.save_calibration_json, style="Ghost.TButton"
         )
-        self.btn_save_prof_main.pack(side="left", padx=(0, 4))
+        self.btn_save_prof_main.pack(side="right", fill="x", expand=True, padx=(3, 0))
+        ToolTip(self.btn_save_prof_main, lambda: self.tr("tt_save_prof"))
+
+        prof_row2 = tk.Frame(control_card, bg=P["bg_card"])
+        prof_row2.pack(fill="x", pady=(0, 8))
 
         self.btn_train_ai = ttk.Button(
-            prof_row, text=self.tr("btn_train_ai"), command=self.train_ai_pose_from_gui, style="Primary.TButton"
+            prof_row2, text=self.tr("btn_train_ai"), command=self.train_ai_pose_from_gui, style="Primary.TButton"
         )
-        self.btn_train_ai.pack(side="left", padx=(0, 4))
+        self.btn_train_ai.pack(side="left", fill="x", expand=True, padx=(0, 3))
         ToolTip(self.btn_train_ai, lambda: self.tr("tt_train_ai"))
 
         self.btn_settings = ttk.Button(
-            prof_row, text=self.tr("btn_settings"), command=self.open_advanced_settings_dialog, style="Ghost.TButton"
+            prof_row2, text=self.tr("btn_settings"), command=self.open_advanced_settings_dialog, style="Ghost.TButton"
         )
-        self.btn_settings.pack(side="right")
+        self.btn_settings.pack(side="right", fill="x", expand=True, padx=(3, 0))
         ToolTip(self.btn_settings, lambda: self.tr("tt_settings"))
 
         tk.Frame(control_card, bg=P["border"], height=1).pack(fill="x", pady=(0, 8))
@@ -3190,8 +3330,8 @@ class PerVideoIDTrackerApp:
         bottom_frame = tk.Frame(self.root, bg=P["bg_main"], padx=16, pady=0)
         bottom_frame.pack(fill="x", pady=(0, 12))
 
-        log_outer, log_card, self.lbl_sec3 = self._create_section_card(
-            bottom_frame, self.tr("sec3_title"), P["blue"], "STATUS & LOG"
+        log_outer, log_card, self.lbl_sec3, self.badge_sec3 = self._create_section_card(
+            bottom_frame, self.tr("sec3_title"), P["blue"], self.tr("badge_log")
         )
         log_outer.pack(fill="x")
 
@@ -3301,16 +3441,20 @@ class PerVideoIDTrackerApp:
         ttk.Button(bottom_row, text=self.tr("btn_close_settings"), command=win.destroy, style="Emerald.TButton").pack(side="right")
 
     def _update_ui_texts(self):
+        self.root.title(self.tr("app_window_title", app_name=APP_NAME, version=APP_VERSION))
         self.lbl_subtitle.config(text=self.tr("subtitle"))
         self.lbl_output_dir.config(text=f"{self.tr('out_dir_prefix')} {self.output_base_dir}")
         self.btn_change_dir.config(text=self.tr("btn_change_dir"))
         self.btn_open_dir.config(text=self.tr("btn_open_dir"))
         self.btn_settings.config(text=self.tr("btn_settings"))
+        self.btn_lang.config(text="EN" if self.lang == "en" else "HU")
 
         for k_key, tr_key in [("videos", "kpi_videos"), ("calib", "kpi_calib"), ("engine", "kpi_engine"), ("dlc", "kpi_dlc")]:
             self.kpi_title_labels[k_key].config(text=self.tr(tr_key))
 
         self.lbl_sec1.config(text=self.tr("sec1_title"))
+        if hasattr(self, "badge_sec1") and self.badge_sec1:
+            self.badge_sec1.config(text=self.tr("badge_queue"))
         self.btn_add_vid.config(text=self.tr("btn_add_vid"))
         self.btn_edit_id.config(text=self.tr("btn_edit_id"))
         self.btn_remove_vid.config(text=self.tr("btn_remove_vid"))
@@ -3322,6 +3466,8 @@ class PerVideoIDTrackerApp:
         self.tree.heading("path", text=self.tr("col_path"))
 
         self.lbl_sec2.config(text=self.tr("sec2_title"))
+        if hasattr(self, "badge_sec2") and self.badge_sec2:
+            self.badge_sec2.config(text=self.tr("badge_controls"))
         if hasattr(self, "lbl_sub_calib"):
             self.lbl_sub_calib.config(text=self.tr("sub_calib"))
         if hasattr(self, "lbl_sub_params"):
@@ -3330,6 +3476,8 @@ class PerVideoIDTrackerApp:
             self.lbl_sub_exec.config(text=self.tr("sub_exec"))
         self.chk_auto_calib.config(text=self.tr("chk_auto_calib"))
         self.chk_yolo_fusion.config(text=self.tr("chk_yolo_fusion"))
+        if hasattr(self, "chk_lock_lr"):
+            self.chk_lock_lr.config(text=self.tr("chk_lock_lr"))
         self.chk_bidirectional.config(text=self.tr("chk_bidirectional"))
         self.chk_rev.config(text=self.tr("chk_rev"))
         self.lbl_gatecm.config(text=self.tr("lbl_gatecm"))
@@ -3350,6 +3498,8 @@ class PerVideoIDTrackerApp:
         self.btn_quick_start.config(text=self.tr("btn_quick"))
         self.btn_stop.config(text=self.tr("btn_stop"))
         self.lbl_sec3.config(text=self.tr("sec3_title"))
+        if hasattr(self, "badge_sec3") and self.badge_sec3:
+            self.badge_sec3.config(text=self.tr("badge_log"))
 
         if not self.is_running:
             self.progress_lbl.config(text=self.tr("prog_idle", done=self.completed_videos, total=len(self.video_data)))
@@ -3423,12 +3573,20 @@ class PerVideoIDTrackerApp:
         body.pack(fill="both", expand=True)
 
         # Left Column: Dataset Inspection & Canvas
-        left_outer, left_panel, _ = self._create_section_card(body, self.tr("train_preview_title"), P["teal"], "INSPECTOR")
+        left_outer, left_panel, _, _ = self._create_section_card(
+            body, self.tr("preview_inspector_title"), P["teal"], self.tr("badge_inspector")
+        )
         left_outer.pack(side="left", fill="both", expand=True, padx=(0, 12))
 
-        # Left Nav Bar
-        nav_bar = tk.Frame(left_panel, bg=P["bg_card"])
-        nav_bar.pack(fill="x", pady=(0, 8))
+        # Left Nav Bar: 2 clean, responsive rows
+        nav_box = tk.Frame(left_panel, bg=P["bg_card"])
+        nav_box.pack(fill="x", pady=(0, 8))
+
+        nav_row1 = tk.Frame(nav_box, bg=P["bg_card"])
+        nav_row1.pack(fill="x", pady=(0, 4))
+
+        nav_row2 = tk.Frame(nav_box, bg=P["bg_card"])
+        nav_row2.pack(fill="x")
 
         samples_list = []
         current_idx = [0]
@@ -3440,43 +3598,44 @@ class PerVideoIDTrackerApp:
         var_zoom_rodent = tk.BooleanVar(value=True)
         var_show_ai = tk.BooleanVar(value=True)
 
-        btn_prev = ttk.Button(nav_bar, text=self.tr("btn_prev_sample"), style="Ghost.TButton")
+        btn_prev = ttk.Button(nav_row1, text=self.tr("btn_prev_sample"), style="Ghost.TButton")
         btn_prev.pack(side="left", padx=(0, 4))
 
         lbl_counter = tk.Label(
-            nav_bar, text="Minta: 0 / 0", bg=P["bg_card"], fg=P["text_main"],
+            nav_row1, text=self.tr("lbl_sample_counter", cur=0, tot=0), bg=P["bg_card"], fg=P["text_main"],
             font=(self.mono_font, 10, "bold"), width=16, anchor="center"
         )
         lbl_counter.pack(side="left", padx=4)
 
-        btn_next = ttk.Button(nav_bar, text=self.tr("btn_next_sample"), style="Ghost.TButton")
+        btn_next = ttk.Button(nav_row1, text=self.tr("btn_next_sample"), style="Ghost.TButton")
         btn_next.pack(side="left", padx=(0, 8))
 
-        btn_exclude = ttk.Button(nav_bar, text=self.tr("btn_exclude_sample"), style="Ghost.TButton")
+        btn_exclude = ttk.Button(nav_row1, text=self.tr("btn_exclude_sample"), style="Ghost.TButton")
         btn_exclude.pack(side="left", padx=(0, 8))
 
-        btn_auto_clean = ttk.Button(nav_bar, text=self.tr("btn_auto_clean"), style="Ghost.TButton")
+        btn_auto_clean = ttk.Button(nav_row1, text=self.tr("btn_auto_clean"), style="Ghost.TButton")
         btn_auto_clean.pack(side="left", padx=(0, 8))
         ToolTip(btn_auto_clean, lambda: self.tr("tt_auto_clean"))
 
+        btn_rescan = ttk.Button(nav_row1, text=self.tr("btn_rescan_samples"), style="Ghost.TButton")
+        btn_rescan.pack(side="right")
+        ToolTip(btn_rescan, lambda: self.tr("tt_rescan_samples"))
+
         chk_zoom = tk.Checkbutton(
-            nav_bar, text=self.tr("chk_zoom_rodent"), variable=var_zoom_rodent,
+            nav_row2, text=self.tr("chk_zoom_rodent"), variable=var_zoom_rodent,
             bg=P["bg_card"], fg=P["text_main"], selectcolor=P["bg_main"],
             activebackground=P["bg_card"], activeforeground=P["text_main"],
             font=(self.ui_font, 9)
         )
-        chk_zoom.pack(side="left", padx=(0, 6))
+        chk_zoom.pack(side="left", padx=(0, 12))
 
         chk_ai = tk.Checkbutton(
-            nav_bar, text=self.tr("chk_show_ai"), variable=var_show_ai,
+            nav_row2, text=self.tr("chk_show_ai"), variable=var_show_ai,
             bg=P["bg_card"], fg=P["text_main"], selectcolor=P["bg_main"],
             activebackground=P["bg_card"], activeforeground=P["text_main"],
             font=(self.ui_font, 9)
         )
-        chk_ai.pack(side="left", padx=(0, 6))
-
-        btn_rescan = ttk.Button(nav_bar, text=self.tr("btn_rescan_samples"), style="Ghost.TButton")
-        btn_rescan.pack(side="right")
+        chk_ai.pack(side="left")
 
         # Canvas View
         canvas_view = tk.Canvas(left_panel, bg=P["bg_main"], highlightthickness=1, highlightbackground=P["border"], cursor="crosshair")
@@ -3497,7 +3656,9 @@ class PerVideoIDTrackerApp:
         slider_samples.pack(fill="x")
 
         # Right Column: Training Dashboard
-        right_outer, right_panel, _ = self._create_section_card(body, self.tr("lbl_train_params"), P["emerald"], "TRAINER")
+        right_outer, right_panel, _, _ = self._create_section_card(
+            body, self.tr("preview_trainer_title"), P["emerald"], self.tr("badge_trainer")
+        )
         right_outer.pack(side="left", fill="y", padx=0)
         right_outer.config(width=340)
 
@@ -3549,8 +3710,8 @@ class PerVideoIDTrackerApp:
             detected_dev = f"NVIDIA CUDA ({torch.cuda.get_device_name(0)})"
 
         _make_t_row(p_card, self.tr("lbl_device"), detected_dev, val_fg=P["cyan"])
-        _make_t_row(p_card, "Képméret / BBox:", "256×256 px")
-        _make_t_row(p_card, "Modell típus:", "9-Keypoint Pose AI (Paw-Focused)")
+        _make_t_row(p_card, self.tr("lbl_img_size"), "256×256 px")
+        _make_t_row(p_card, self.tr("lbl_model_type"), self.tr("val_model_type"))
 
         # Execution Card
         exec_card = tk.LabelFrame(
@@ -3567,7 +3728,7 @@ class PerVideoIDTrackerApp:
         prog_bar.pack(fill="x", pady=(0, 6))
 
         lbl_prog_status = tk.Label(
-            exec_card, text="Várakozás mintákra...", bg=P["bg_card"], fg=P["text_muted"],
+            exec_card, text=self.tr("status_waiting_samples"), bg=P["bg_card"], fg=P["text_muted"],
             font=(self.ui_font, 8), anchor="w"
         )
         lbl_prog_status.pack(fill="x", pady=(0, 4))
@@ -3582,7 +3743,7 @@ class PerVideoIDTrackerApp:
         btn_test = ttk.Button(exec_card, text=self.tr("btn_test_model"), style="Ghost.TButton")
         btn_test.pack(fill="x", pady=(0, 4))
 
-        btn_close = ttk.Button(right_panel, text="Bezárás", command=preview_win.destroy, style="Ghost.TButton")
+        btn_close = ttk.Button(right_panel, text=self.tr("btn_close"), command=preview_win.destroy, style="Ghost.TButton")
         btn_close.pack(fill="x", side="bottom")
 
         def _render_current_sample():
@@ -3725,7 +3886,7 @@ class PerVideoIDTrackerApp:
             # Update Telemetry & Counts
             s_idx = current_idx[0] + 1
             tot = len(samples_list)
-            lbl_counter.config(text=f"Minta: {s_idx} / {tot}")
+            lbl_counter.config(text=self.tr("lbl_sample_counter", cur=s_idx, tot=tot))
             slider_samples.config(to=max(1, tot))
             slider_var.set(s_idx)
 
@@ -3736,10 +3897,10 @@ class PerVideoIDTrackerApp:
             bw_val, bh_val = sample.get("bbox", (0, 0, 0, 0))[2:4]
             is_ex = sample.get("excluded", False)
 
-            status_str = "❌ KIZÁRVA (A tréningből és a tesztelésből kihagyva)" if is_ex else "✔ ÉRVÉNYES TANÍTÓ MINTA"
+            status_str = self.tr("sample_status_excluded") if is_ex else self.tr("sample_status_valid")
             status_fg = P["danger"] if is_ex else P["emerald"]
             lbl_sample_info.config(
-                text=f"Videó: {v_name} | #{f_num} ({sec_val:.2f}s) | Terület: {area_val:,} px | Méret: {bw_val}×{bh_val} px | {status_str}",
+                text=f"{v_name} | #{f_num} ({sec_val:.2f}s) | {area_val:,} px | {bw_val}×{bh_val} px | {status_str}",
                 fg=status_fg
             )
 
@@ -3766,7 +3927,7 @@ class PerVideoIDTrackerApp:
                     _render_current_sample()
                 else:
                     s_idx = current_idx[0] + 1
-                    lbl_counter.config(text=f"Minta: {s_idx} / {len(samples_list)}")
+                    lbl_counter.config(text=self.tr("lbl_sample_counter", cur=s_idx, tot=len(samples_list)))
                     slider_samples.config(to=len(samples_list))
             preview_win.after(0, _gui_add)
 
@@ -4354,7 +4515,7 @@ class PerVideoIDTrackerApp:
         P = self.PALETTE
         top = tk.Toplevel(self.root)
         top.title(self.tr("edit_id_title"))
-        top.geometry("360x165")
+        top.geometry("380x180")
         top.configure(bg=P["bg_card"])
         top.resizable(False, False)
         top.transient(self.root)
@@ -4394,7 +4555,10 @@ class PerVideoIDTrackerApp:
         top.bind("<Escape>", lambda e: top.destroy())
         top.after(50, lambda: (entry.focus_force(), entry.select_range(0, tk.END)))
 
-        ttk.Button(top, text=self.tr("btn_save_enter"), command=save_id, style="Emerald.TButton").pack(pady=4)
+        btn_row = tk.Frame(top, bg=P["bg_card"])
+        btn_row.pack(pady=4)
+        ttk.Button(btn_row, text=self.tr("btn_cancel"), command=top.destroy, style="Ghost.TButton").pack(side="left", padx=4)
+        ttk.Button(btn_row, text=self.tr("btn_save_enter"), command=save_id, style="Emerald.TButton").pack(side="left", padx=4)
 
     def open_results_folder(self):
         folder = os.path.abspath(self.output_base_dir)
@@ -5756,7 +5920,7 @@ class PerVideoIDTrackerApp:
         if start_preview_frame is None:
             start_preview_frame = self._find_best_mouse_preview_frame(cap, base_gray, rx, ry, rw, rh, total_frames)
 
-        win_calib = "Calibration Preview (Wheel=Zoom, RightDrag=Pan, LeftClick=Move Gate, ENTER=Start)"
+        win_calib = self.tr("calib_win_title")
         cv2.namedWindow(win_calib, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(win_calib, min(1180, frame_w), min(820, frame_h + 120))
 
@@ -5765,11 +5929,17 @@ class PerVideoIDTrackerApp:
         def on_trackbar_change(val):
             vp_calib.dirty = True
 
-        cv2.createTrackbar("Frame", win_calib, int(start_preview_frame), max(1, total_frames - 1), on_trackbar_change)
-        cv2.createTrackbar("Brightness", win_calib, self.calib_dark_thresh, 220, on_trackbar_change)
-        cv2.createTrackbar("Motion Diff", win_calib, self.calib_diff_thresh, 100, on_trackbar_change)
-        cv2.createTrackbar("Rung Mask", win_calib, self.calib_ladder_thresh, 200, on_trackbar_change)
-        cv2.createTrackbar("Fault Line %", win_calib, self.calib_fault_Ratio, 96, on_trackbar_change)
+        tb_frame = self.tr("calib_tb_frame")
+        tb_dark = self.tr("calib_tb_dark")
+        tb_diff = self.tr("calib_tb_diff")
+        tb_ladder = self.tr("calib_tb_ladder")
+        tb_fault = self.tr("calib_tb_fault")
+
+        cv2.createTrackbar(tb_frame, win_calib, int(start_preview_frame), max(1, total_frames - 1), on_trackbar_change)
+        cv2.createTrackbar(tb_dark, win_calib, self.calib_dark_thresh, 220, on_trackbar_change)
+        cv2.createTrackbar(tb_diff, win_calib, self.calib_diff_thresh, 100, on_trackbar_change)
+        cv2.createTrackbar(tb_ladder, win_calib, self.calib_ladder_thresh, 200, on_trackbar_change)
+        cv2.createTrackbar(tb_fault, win_calib, self.calib_fault_Ratio, 96, on_trackbar_change)
 
         def calib_mouse_cb(event, x, y, flags, param):
             nonlocal left_gate_x, right_gate_x
@@ -5804,11 +5974,11 @@ class PerVideoIDTrackerApp:
                 self.reset_ui()
                 return
 
-            f_idx = max(0, cv2.getTrackbarPos("Frame", win_calib))
-            dark_t = max(50, cv2.getTrackbarPos("Brightness", win_calib))
-            diff_t = max(8, cv2.getTrackbarPos("Motion Diff", win_calib))
-            ladder_t = max(30, cv2.getTrackbarPos("Rung Mask", win_calib))
-            fault_pct = max(25, cv2.getTrackbarPos("Fault Line %", win_calib))
+            f_idx = max(0, cv2.getTrackbarPos(tb_frame, win_calib))
+            dark_t = max(50, cv2.getTrackbarPos(tb_dark, win_calib))
+            diff_t = max(8, cv2.getTrackbarPos(tb_diff, win_calib))
+            ladder_t = max(30, cv2.getTrackbarPos(tb_ladder, win_calib))
+            fault_pct = max(25, cv2.getTrackbarPos(tb_fault, win_calib))
 
             curr_params = (f_idx, dark_t, diff_t, ladder_t, fault_pct, left_gate_x, right_gate_x)
 
@@ -5867,8 +6037,8 @@ class PerVideoIDTrackerApp:
                 cv2.line(disp, (left_gate_x, ry), (left_gate_x, ry + rh), (50, 255, 50), 2)
                 cv2.line(disp, (right_gate_x, ry), (right_gate_x, ry + rh), (50, 50, 255), 2)
                 cv2.putText(
-                    disp, "GREEN GATE=Start | RED GATE=Goal | RED LINE=Fault Line | ENTER=Start Analysis",
-                    (20, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 2
+                    disp, self.tr("calib_overlay_hint"),
+                    (20, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2
                 )
 
                 cached_disp = disp
@@ -6580,31 +6750,35 @@ class PerVideoIDTrackerApp:
         body = tk.Frame(rev_win, bg=P["bg_main"], padx=16, pady=10)
         body.pack(fill="both", expand=True)
 
-        left_outer, left_panel, _ = self._create_section_card(body, self.tr("events_table_title"), P["blue"], "EVENTS")
+        left_outer, left_panel, _, _ = self._create_section_card(
+            body, self.tr("events_table_title"), P["blue"], self.tr("badge_events")
+        )
         left_outer.pack(side="left", fill="y", padx=(0, 12))
 
         cols = ("ego", "run", "sec", "part", "valid", "save")
         dip_tree = ttk.Treeview(left_panel, columns=cols, show="headings", height=20, selectmode="browse")
-        dip_tree.heading("ego", text="ID")
-        dip_tree.heading("run", text="Run")
-        dip_tree.heading("sec", text="Sec")
-        dip_tree.heading("part", text="Body Part [T]")
-        dip_tree.heading("valid", text="Status")
-        dip_tree.heading("save", text="Snap [S]")
+        dip_tree.heading("ego", text=self.tr("col_rev_id"))
+        dip_tree.heading("run", text=self.tr("col_rev_run"))
+        dip_tree.heading("sec", text=self.tr("col_rev_sec"))
+        dip_tree.heading("part", text=self.tr("col_rev_part"))
+        dip_tree.heading("valid", text=self.tr("col_rev_valid"))
+        dip_tree.heading("save", text=self.tr("col_rev_save"))
 
-        dip_tree.column("ego", width=55, anchor="center")
-        dip_tree.column("run", width=55, anchor="center")
-        dip_tree.column("sec", width=65, anchor="center")
-        dip_tree.column("part", width=160, anchor="center")
-        dip_tree.column("valid", width=75, anchor="center")
-        dip_tree.column("save", width=65, anchor="center")
+        dip_tree.column("ego", width=65, anchor="center")
+        dip_tree.column("run", width=60, anchor="center")
+        dip_tree.column("sec", width=70, anchor="center")
+        dip_tree.column("part", width=170, anchor="center")
+        dip_tree.column("valid", width=90, anchor="center")
+        dip_tree.column("save", width=70, anchor="center")
         dip_tree.pack(side="left", fill="y")
 
         sb = ttk.Scrollbar(left_panel, orient="vertical", command=dip_tree.yview)
         sb.pack(side="right", fill="y")
         dip_tree.configure(yscrollcommand=sb.set)
 
-        right_outer, right_panel, _ = self._create_section_card(body, self.tr("inspector_canvas_title"), P["teal"], "INSPECTOR")
+        right_outer, right_panel, _, _ = self._create_section_card(
+            body, self.tr("inspector_canvas_title"), P["teal"], self.tr("badge_inspector")
+        )
         right_outer.pack(side="left", fill="both", expand=True)
 
         canvas_view = tk.Canvas(right_panel, bg=P["bg_main"], highlightthickness=0, cursor="crosshair")
@@ -6623,6 +6797,8 @@ class PerVideoIDTrackerApp:
                     item_counter += 1
                     ordered_iids.append(iid)
                     dip_lookup[iid] = (res, r, d)
+                    val_str = self.tr("val_valid") if d["valid"] else self.tr("val_ignored")
+                    save_str = self.tr("val_yes") if d["save_crop"] else self.tr("val_no")
                     dip_tree.insert(
                         "", "end", iid=iid,
                         values=(
@@ -6630,8 +6806,8 @@ class PerVideoIDTrackerApp:
                             f"#{r['run_num']}",
                             f"{d['sec']:.2f}s",
                             d.get("dlc_part", "MANCS (Lábhiba)"),
-                            "VALID" if d["valid"] else "IGNORED",
-                            "Yes" if d["save_crop"] else "No"
+                            val_str,
+                            save_str
                         )
                     )
 
@@ -6784,6 +6960,8 @@ class PerVideoIDTrackerApp:
 
         def update_tree_row(iid):
             res, r, d = dip_lookup[iid]
+            val_str = self.tr("val_valid") if d["valid"] else self.tr("val_ignored")
+            save_str = self.tr("val_yes") if d["save_crop"] else self.tr("val_no")
             dip_tree.item(
                 iid,
                 values=(
@@ -6791,8 +6969,8 @@ class PerVideoIDTrackerApp:
                     f"#{r['run_num']}",
                     f"{d['sec']:.2f}s",
                     d.get("dlc_part", "MANCS (Lábhiba)"),
-                    "VALID" if d["valid"] else "IGNORED",
-                    "Yes" if d["save_crop"] else "No"
+                    val_str,
+                    save_str
                 )
             )
 
@@ -6874,13 +7052,33 @@ class PerVideoIDTrackerApp:
         quick_btn_row = tk.Frame(ctrl_box, bg=P["bg_panel"], pady=6, padx=6)
         quick_btn_row.pack(fill="x")
 
-        ttk.Button(quick_btn_row, text=self.tr("btn_prev"), command=lambda: step_selection(-1), style="Ghost.TButton").pack(side="left", padx=(0, 6))
-        ttk.Button(quick_btn_row, text=self.tr("btn_next"), command=lambda: step_selection(1), style="Ghost.TButton").pack(side="left", padx=(0, 10))
-        ttk.Button(quick_btn_row, text=self.tr("btn_toggle_valid"), command=hotkey_toggle_valid, style="SoftRed.TButton").pack(side="left", padx=(0, 6))
-        ttk.Button(quick_btn_row, text=self.tr("btn_cycle_part"), command=hotkey_cycle_part, style="Teal.TButton").pack(side="left", padx=(0, 6))
-        ttk.Button(quick_btn_row, text="2.5× [Z]", command=lambda: zoom_to_dip(2.5), style="Ghost.TButton").pack(side="left", padx=(0, 6))
-        ttk.Button(quick_btn_row, text="1.0× [R]", command=reset_zoom, style="Ghost.TButton").pack(side="left", padx=(0, 6))
-        ttk.Button(quick_btn_row, text=self.tr("btn_toggle_crop"), command=hotkey_toggle_save, style="Primary.TButton").pack(side="left")
+        btn_r_prev = ttk.Button(quick_btn_row, text=self.tr("btn_prev"), command=lambda: step_selection(-1), style="Ghost.TButton")
+        btn_r_prev.pack(side="left", padx=(0, 6))
+        ToolTip(btn_r_prev, lambda: self.tr("tt_rev_prev"))
+
+        btn_r_next = ttk.Button(quick_btn_row, text=self.tr("btn_next"), command=lambda: step_selection(1), style="Ghost.TButton")
+        btn_r_next.pack(side="left", padx=(0, 10))
+        ToolTip(btn_r_next, lambda: self.tr("tt_rev_next"))
+
+        btn_r_valid = ttk.Button(quick_btn_row, text=self.tr("btn_toggle_valid"), command=hotkey_toggle_valid, style="SoftRed.TButton")
+        btn_r_valid.pack(side="left", padx=(0, 6))
+        ToolTip(btn_r_valid, lambda: self.tr("tt_rev_valid"))
+
+        btn_r_part = ttk.Button(quick_btn_row, text=self.tr("btn_cycle_part"), command=hotkey_cycle_part, style="Teal.TButton")
+        btn_r_part.pack(side="left", padx=(0, 6))
+        ToolTip(btn_r_part, lambda: self.tr("tt_rev_part"))
+
+        btn_r_zoom = ttk.Button(quick_btn_row, text="2.5× [Z]", command=lambda: zoom_to_dip(2.5), style="Ghost.TButton")
+        btn_r_zoom.pack(side="left", padx=(0, 6))
+        ToolTip(btn_r_zoom, lambda: self.tr("tt_rev_zoom"))
+
+        btn_r_reset = ttk.Button(quick_btn_row, text="1.0× [R]", command=reset_zoom, style="Ghost.TButton")
+        btn_r_reset.pack(side="left", padx=(0, 6))
+        ToolTip(btn_r_reset, lambda: self.tr("tt_rev_reset"))
+
+        btn_r_crop = ttk.Button(quick_btn_row, text=self.tr("btn_toggle_crop"), command=hotkey_toggle_save, style="Primary.TButton")
+        btn_r_crop.pack(side="left")
+        ToolTip(btn_r_crop, lambda: self.tr("tt_rev_crop"))
 
         dip_tree.bind("<<TreeviewSelect>>", on_select)
         if ordered_iids:
@@ -6919,10 +7117,12 @@ class PerVideoIDTrackerApp:
             rev_win.bind(k, reset_zoom)
         rev_win.bind("<Return>", confirm_and_close)
 
-        ttk.Button(
+        btn_r_export = ttk.Button(
             bottom_bar, text=self.tr("btn_confirm_export"),
             command=confirm_and_close, style="Emerald.TButton"
-        ).pack(side="right")
+        )
+        btn_r_export.pack(side="right")
+        ToolTip(btn_r_export, lambda: self.tr("tt_rev_export"))
 
         rev_win.protocol("WM_DELETE_WINDOW", confirm_and_close)
 
