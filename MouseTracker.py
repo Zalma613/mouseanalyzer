@@ -238,9 +238,8 @@ TRANSLATIONS = {
         "tt_stop": "Azonnal megszakítja az aktív elemző szálakat.",
         "tt_change_dir": "A kimeneti CSV fájlok és hőtérképek célkönyvtárának módosítása.",
         "tt_open_dir": "Az eredmények mappájának megnyitása a fájlkezelőben.",
-        "tt_train_ai": "Egyedi 9-pontos YOLOv8-Pose modell (mouse_pose_ai.pt) automatikus tanítása a videókból.",
         "review_title": "Kinematikai Esemény-Ellenőrző Munkaállomás",
-        "review_banner_help": "Navigáció: [↑]/[↓] vagy [A]/[D] | Érvényesség: [Szóköz] | Testrész: [T] | Képkivágás mentése: [S] | Zoom: [Z] / [R] | Exportálás: [Enter]",
+        "review_banner_help": "Navigáció: [↑]/[↓] vagy [A]/[D] | Érvényesség: [Szóköz] | Gyors Testrész: [1]=Mellső, [2]=Hátsó, [3]=Orr, [4]=Farok | Shift+Kattintás: Pont áthelyezése | Zoom: [Z]/[R] | Kész: [Enter]",
         "events_table_title": "Detektált Események Listája",
         "inspector_canvas_title": "Létra és Alany Részletes Előnézet",
         "btn_prev": "◀ Előző (A)",
@@ -408,9 +407,8 @@ TRANSLATIONS = {
         "tt_stop": "Immediately terminates all active analysis worker threads.",
         "tt_change_dir": "Select output directory for CSV tables and heatmaps.",
         "tt_open_dir": "Open active results directory in file manager.",
-        "tt_train_ai": "Train a custom 9-keypoint YOLOv8-Pose model (mouse_pose_ai.pt) from videos.",
         "review_title": "Kinematic Event Inspector & Verification Workstation",
-        "review_banner_help": "Navigation: [↑]/[↓] or [A]/[D] | Toggle Valid: [Space] | Cycle Body Part: [T] | Save Crop: [S] | Zoom: [Z] / [R] | Export: [Enter]",
+        "review_banner_help": "Navigation: [↑]/[↓] or [A]/[D] | Toggle Valid: [Space] | Quick Body Part: [1]=Forepaw, [2]=Hindpaw, [3]=Nose, [4]=Tail | Shift+Click: Relocate point | Zoom: [Z]/[R] | Done: [Enter]",
         "events_table_title": "Detected Events List",
         "inspector_canvas_title": "Detailed Ladder & Rodent Inspector",
         "btn_prev": "◀ Prev (A)",
@@ -700,6 +698,30 @@ def decode_frame_compressed(buf):
         return buf
     return cv2.imdecode(buf, cv2.IMREAD_COLOR)
 
+def encode_mask_compressed(mask):
+    if mask is None:
+        return None
+    ok, buf = cv2.imencode(".png", mask)
+    return buf if ok else None
+
+
+def decode_mask_compressed(buf):
+    if buf is None:
+        return None
+    if isinstance(buf, np.ndarray) and buf.ndim == 2:
+        return buf
+    return cv2.imdecode(buf, cv2.IMREAD_GRAYSCALE)
+
+
+def unpack_sample_images(sample):
+    """On-demand lazy decoder for training preview samples (saves ~90% RAM)."""
+    crop = sample.get("crop")
+    if crop is None and sample.get("crop_buf") is not None:
+        crop = decode_frame_compressed(sample["crop_buf"])
+    mask = sample.get("mask")
+    if mask is None and sample.get("mask_buf") is not None:
+        mask = decode_mask_compressed(sample["mask_buf"])
+    return crop, mask
 
 def close_opencv_windows():
     cv2.destroyAllWindows()
@@ -713,13 +735,139 @@ def is_window_open(win_name):
     except Exception:
         return False
 
+# ==============================================================================
+# TEAMS / ONEDRIVE / CLOUD & URL VIDEO RESOLVER
+# ==============================================================================
+import urllib.request
+import urllib.parse
+import hashlib
 
-def open_video_accelerated(video_path, use_hw=True):
-    norm_path = os.path.normpath(video_path)
+class CloudVideoResolver:
+    """
+    Handles:
+    1. Microsoft Teams / OneDrive / SharePoint synced local placeholder files (Files On-Demand hydration).
+    2. Direct HTTP/HTTPS video links, Google Drive, OneDrive/Teams shared links, and yt-dlp streams.
+    Caches downloaded files in SAFE_BASE_DIR/_Cloud_Video_Cache so they only download once.
+    """
+    CACHE_DIR = os.path.join(SAFE_BASE_DIR, "_Cloud_Video_Cache")
+
+    @classmethod
+    def is_url(cls, path_or_url):
+        return str(path_or_url).strip().lower().startswith(("http://", "https://"))
+
+    @classmethod
+    def hydrate_cloud_placeholder(cls, filepath, log_cb=print):
+        """Forces Windows/macOS OneDrive & Teams Files On-Demand to download the file locally."""
+        if not os.path.exists(filepath):
+            return False
+        try:
+            # Reading first & middle chunks in Python triggers OS cloud filter driver hydration
+            with open(filepath, "rb") as f:
+                head = f.read(65536)
+                if not head:
+                    return False
+            return True
+        except Exception as exc:
+            log_cb(f"⚠ [Teams/Cloud Sync] Hydration warning for '{os.path.basename(filepath)}': {exc}")
+            return False
+
+    @classmethod
+    def _transform_shared_cloud_url(cls, url):
+        """Converts Google Drive and OneDrive/SharePoint sharing links into direct download streams."""
+        u = url.strip()
+        # Google Drive link átalakítása
+        if "drive.google.com/file/d/" in u:
+            parts = u.split("/file/d/")
+            if len(parts) > 1:
+                file_id = parts[1].split("/")[0].split("?")[0]
+                return f"https://drive.google.com/uc?export=download&id={file_id}"
+        # OneDrive / SharePoint / Teams megosztott link közvetlen letöltése
+        if ("1drv.ms" in u or "sharepoint.com" in u or "onedrive.live.com" in u) and "download=1" not in u:
+            sep = "&" if "?" in u else "?"
+            return f"{u}{sep}download=1"
+        return u
+
+    @classmethod
+    def resolve_to_local_path(cls, path_or_url, log_cb=print, browser_for_auth="edge"):
+        """
+        Returns a valid, locally readable video file path from a local path, Teams placeholder, or URL.
+        """
+        raw = str(path_or_url).strip()
+        if not cls.is_url(raw):
+            norm_p = os.path.normpath(raw)
+            cls.hydrate_cloud_placeholder(norm_p, log_cb=log_cb)
+            return norm_p
+
+        os.makedirs(cls.CACHE_DIR, exist_ok=True)
+        url_hash = hashlib.md5(raw.encode("utf-8")).hexdigest()[:10]
+        parsed_path = urllib.parse.urlparse(raw).path
+        base_name = os.path.basename(parsed_path) or f"cloud_video_{url_hash}.mp4"
+        base_name = "".join(c for c in base_name if c.isalnum() or c in (".", "_", "-"))
+        if not base_name.lower().endswith((".mp4", ".avi", ".mov", ".mkv")):
+            base_name += ".mp4"
+
+        cached_file = os.path.join(cls.CACHE_DIR, f"{url_hash}_{base_name}")
+        if os.path.exists(cached_file) and os.path.getsize(cached_file) > 102400:
+            log_cb(f"☁ [Cloud Cache] Using cached video: {os.path.basename(cached_file)}")
+            return cached_file
+
+        direct_url = cls._transform_shared_cloud_url(raw)
+        log_cb(f"🌐 [Cloud Downloader] Downloading remote video: {raw[:75]}...")
+
+        # 1. Kísérlet: yt-dlp Python API (Teams/SharePoint/Stream/YouTube + Böngésző Cookie támogatás)
+        if importlib.util.find_spec("yt_dlp") is not None:
+            try:
+                import yt_dlp
+                ydl_opts = {
+                    "outtmpl": cached_file,
+                    "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                    "quiet": True,
+                    "no_warnings": True,
+                }
+                # Ha SharePoint / Teams privát link, átvesszük a bejelentkezett böngésző sütijeit
+                if any(k in raw.lower() for k in ("sharepoint.com", "teams.microsoft.com", "stream.office.com")):
+                    ydl_opts["cookiesfrombrowser"] = (browser_for_auth,)
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([raw])
+                if os.path.exists(cached_file) and os.path.getsize(cached_file) > 102400:
+                    log_cb(f"✅ [Cloud Downloader] Saved via yt-dlp: {os.path.basename(cached_file)}")
+                    return cached_file
+            except Exception as e:
+                log_cb(f"ℹ [yt-dlp fallback] Direct HTTP stream attempt ({e})...")
+
+        # 2. Kísérlet: Közvetlen HTTP/HTTPS stream letöltés (OneDrive download=1, Direct MP4, WebDAV)
+        try:
+            req = urllib.request.Request(
+                direct_url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            )
+            with urllib.request.urlopen(req, timeout=45) as resp, open(cached_file, "wb") as out_f:
+                shutil.copyfileobj(resp, out_f, length=1024 * 512)
+
+            if os.path.exists(cached_file) and os.path.getsize(cached_file) > 102400:
+                # Ellenőrizzük, hogy nem egy HTML login oldalt töltött-e le a videó helyett
+                with open(cached_file, "rb") as chk:
+                    header_bytes = chk.read(256).lower()
+                if b"<!doctype html" in header_bytes or b"<html" in header_bytes:
+                    os.remove(cached_file)
+                    raise RuntimeError(
+                        "A link bejelentkezést igényel (HTML oldal érkezett videó helyett). "
+                        "Teams/SharePoint esetén használd a Teams 'Szinkronizálás' (Sync) gombját vagy telepítsd a 'yt-dlp' csomagot!"
+                    )
+                log_cb(f"✅ [Cloud Downloader] Downloaded: {os.path.basename(cached_file)}")
+                return cached_file
+        except Exception as exc:
+            log_cb(f"❌ [Cloud Error] Failed to download URL: {exc}")
+
+        # 3. Utolsó esély: átadjuk közvetlenül az FFmpeg/OpenCV hálózati dekódernek
+        return direct_url
+
+def open_video_accelerated(video_path, use_hw=True, log_cb=print):
+    resolved_path = CloudVideoResolver.resolve_to_local_path(video_path, log_cb=log_cb)
     if use_hw and hasattr(cv2, "CAP_PROP_HW_ACCELERATION") and hasattr(cv2, "VIDEO_ACCELERATION_ANY"):
         try:
             cap = cv2.VideoCapture(
-                norm_path,
+                resolved_path,
                 cv2.CAP_ANY,
                 [cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY]
             )
@@ -731,7 +879,7 @@ def open_video_accelerated(video_path, use_hw=True):
                 cap.release()
         except Exception:
             pass
-    return cv2.VideoCapture(norm_path)
+    return cv2.VideoCapture(resolved_path)
 
 
 class MouseKalmanTracker:
@@ -838,14 +986,13 @@ class AsyncVideoReader:
 
 
 # ==============================================================================
-# PARALLEL YOLO + OPENCV HYBRID SPATIAL LOCATOR ENGINE
+# PARALLEL YOLO + OPENCV HYBRID SPATIAL LOCATOR ENGINE (THREAD-SAFE v3.7)
 # ==============================================================================
 class ParallelYoloOpenCVEngine:
     """
     Thread-safe YOLO engine + 1D/2D OpenCV Torso-Core Density Locator.
-    Correctly distinguishes genuine 9-keypoint rodent pose models from generic
-    COCO human pose models (yolov8n-pose.pt), preventing human eyes/ears from
-    being assigned to mouse paws/tail!
+    Supports concurrent multi-video processing without cross-stream pose contamination
+    or GPU command buffer race conditions.
     """
     def __init__(self, log_callback=print):
         self.log = log_callback
@@ -856,7 +1003,8 @@ class ParallelYoloOpenCVEngine:
         self.stream_lock = threading.Lock()
         self.stream_states = {}
         self.latest_pose_by_stream = {}
-        self.last_sync_pose = None
+        self._tls = threading.local()  # Szál-lokális tároló az aktuális worker pózának
+        self.last_sync_pose = None     # Fallback egyszálas (preview) hívásokhoz
         self.is_pose_model = False
         self.is_rodent_pose = False
         self.model_name = "None"
@@ -901,33 +1049,33 @@ class ParallelYoloOpenCVEngine:
                 if not os.path.exists(p):
                     p = get_resource_path(candidate)
                 if os.path.exists(p):
-                    self.yolo_model = YOLO(p)
-                    self.model_name = candidate
-                    names = getattr(self.yolo_model, "names", {}) or {}
-                    # Check whether this model is trained specifically on rodent pose
-                    is_pose = ("pose" in candidate.lower()) or getattr(self.yolo_model, "task", "") == "pose"
-                    self.is_pose_model = is_pose
-                    self.is_rodent_pose = is_pose and ("mouse" in candidate.lower() or "rodent" in str(names).lower())
-                    if self.yolo_executor is None:
-                        self.yolo_executor = ThreadPoolExecutor(
-                            max_workers=max(2, min(4, os.cpu_count() or 4)), thread_name_prefix="mouse-yolo"
-                        )
-                    # Warm up GPU Metal/CUDA kernels immediately to eliminate startup latency
-                    try:
-                        dummy = np.zeros((128, 128, 3), dtype=np.uint8)
-                        self.yolo_model.predict(dummy, device=self.device, verbose=False, imgsz=128)
-                        if self.device == "mps":
-                            import torch
-                            torch.mps.synchronize()
-                    except Exception:
-                        pass
+                    with self.yolo_lock:
+                        self.yolo_model = YOLO(p)
+                        self.model_name = candidate
+                        names = getattr(self.yolo_model, "names", {}) or {}
+                        is_pose = ("pose" in candidate.lower()) or getattr(self.yolo_model, "task", "") == "pose"
+                        self.is_pose_model = is_pose
+                        self.is_rodent_pose = is_pose and ("mouse" in candidate.lower() or "rodent" in str(names).lower())
+                        if self.yolo_executor is None:
+                            self.yolo_executor = ThreadPoolExecutor(
+                                max_workers=max(2, min(4, os.cpu_count() or 4)), thread_name_prefix="mouse-yolo"
+                            )
+                        try:
+                            dummy = np.zeros((128, 128, 3), dtype=np.uint8)
+                            self.yolo_model.predict(dummy, device=self.device, verbose=False, imgsz=128)
+                            if self.device == "mps":
+                                import torch
+                                torch.mps.synchronize()
+                        except Exception:
+                            pass
+
                     if self.is_rodent_pose:
                         mode_tag = "Custom 9-Keypoint Rodent Pose AI"
                     elif is_pose:
                         mode_tag = "YOLO Bounding Box + Anatomical OpenCV"
                     else:
                         mode_tag = "YOLO Object Detection + OpenCV"
-                    self.log(f"⚡ [{mode_tag}] Loaded '{candidate}' on GPU ({self.device.upper()})")
+                    self.log(f"⚡ [{mode_tag}] Loaded '{candidate}' on ({self.device.upper()})")
                     return
         except Exception:
             self.yolo_model = None
@@ -963,19 +1111,61 @@ class ParallelYoloOpenCVEngine:
                 cv2.circle(mask, (int(pb[0]), int(pb[1])), 5, 255, -1)
         return mask
 
-    def _predict_yolo(self, crop_bgr, rw, rh):
+    def _predict_yolo(self, crop_bgr, rw, rh, previous_bbox=None):
+        if self.yolo_model is None:
+            return None, None, None
+
+        # Fókuszált nagyfelbontású egér-kivágás (RoI Zoom):
+        # Megakadályozza, hogy a széles létra 256px-re préselése felismerhetetlenné zsugorítsa a mancsokat!
+        sub_offset = (0, 0)
+        img_to_infer = crop_bgr
+        infer_rw, infer_rh = rw, rh
+
+        if previous_bbox is not None and self.is_rodent_pose:
+            px, py, pw, ph = previous_bbox
+            if pw >= 22 and ph >= 14:
+                pad_w = int(max(50, pw * 0.65))
+                pad_h_top = int(max(30, ph * 0.50))
+                pad_h_bot = int(max(45, ph * 0.75))
+                c_x1 = max(0, px - pad_w)
+                c_y1 = max(0, py - pad_h_top)
+                c_x2 = min(rw, px + pw + pad_w)
+                c_y2 = min(rh, py + ph + pad_h_bot)
+                sub_crop = crop_bgr[c_y1:c_y2, c_x1:c_x2]
+                if sub_crop.shape[0] >= 35 and sub_crop.shape[1] >= 45:
+                    img_to_infer = sub_crop
+                    sub_offset = (c_x1, c_y1)
+                    infer_rw, infer_rh = sub_crop.shape[1], sub_crop.shape[0]
+
         try:
-            results = self.yolo_model.predict(
-                crop_bgr, conf=0.20, verbose=False, device=self.device, imgsz=256
-            )
-            if self.device == "mps":
-                try:
-                    import torch
-                    torch.mps.synchronize()
-                except Exception:
-                    pass
+            # SZÁLBIZTOS GPU HÍVÁS: megakadályozza a párhuzamos CUDA/MPS összeomlást
+            with self.yolo_lock:
+                results = self.yolo_model.predict(
+                    img_to_infer, conf=0.18, verbose=False, device=self.device, imgsz=256
+                )
+                if self.device == "mps":
+                    try:
+                        import torch
+                        torch.mps.synchronize()
+                    except Exception:
+                        pass
+                names = getattr(self.yolo_model, "names", {}) or {}
         except Exception:
             return None, None, None
+
+        # Ha a szűkített kivágásban nem talált semmit, visszaváltunk a teljes létrára
+        if (not results or len(results[0].boxes) == 0) and sub_offset != (0, 0):
+            try:
+                with self.yolo_lock:
+                    results = self.yolo_model.predict(
+                        crop_bgr, conf=0.18, verbose=False, device=self.device, imgsz=256
+                    )
+                    names = getattr(self.yolo_model, "names", {}) or {}
+                sub_offset = (0, 0)
+                infer_rw, infer_rh = rw, rh
+            except Exception:
+                return None, None, None
+
         if not results:
             return None, None, None
 
@@ -983,10 +1173,10 @@ class ParallelYoloOpenCVEngine:
         yolo_bbox = None
         yolo_seg_mask = None
         yolo_pose_kpts = None
+
         if result.boxes is not None and len(result.boxes) > 0:
             boxes = result.boxes.xyxy.cpu().numpy()
             cls_ids = result.boxes.cls.cpu().numpy().astype(int) if result.boxes.cls is not None else None
-            names = getattr(self.yolo_model, "names", {}) or {}
             is_generic_coco = len(names) > 15
 
             best_i = -1
@@ -994,9 +1184,9 @@ class ParallelYoloOpenCVEngine:
             for i, box in enumerate(boxes):
                 x1, y1, x2, y2 = [int(v) for v in box]
                 bw, bh = x2 - x1, y2 - y1
-                if bw < 16 or bh < 8 or bw >= rw * 0.85 or bh >= rh * 0.95:
+                if bw < 16 or bh < 8 or bw >= infer_rw * 0.85 or bh >= infer_rh * 0.95:
                     continue
-                if (y1 + bh * 0.5) > rh * 0.85:
+                if (y1 + bh * 0.5) > infer_rh * 0.85:
                     continue
                 if is_generic_coco and cls_ids is not None and i < len(cls_ids):
                     cname = str(names.get(int(cls_ids[i]), "")).lower()
@@ -1009,8 +1199,8 @@ class ParallelYoloOpenCVEngine:
 
             if best_i >= 0:
                 x1, y1, x2, y2 = [int(value) for value in boxes[best_i]]
-                yolo_bbox = (x1, y1, x2 - x1, y2 - y1)
-                # Only parse rodent pose keypoints if model is a trained rodent pose model
+                ox, oy = sub_offset
+                yolo_bbox = (x1 + ox, y1 + oy, x2 - x1, y2 - y1)
                 if self.is_rodent_pose and result.keypoints is not None and result.keypoints.xy is not None and len(result.keypoints.xy) > best_i:
                     kpts_xy = result.keypoints.xy[best_i].cpu().numpy()
                     kpts_conf = (
@@ -1024,58 +1214,81 @@ class ParallelYoloOpenCVEngine:
                             "spine_mid", "hip_pt", "hind_paw_pt", "tail_base", "tail_tip"
                         ]
                         parsed = {}
+                        valid_kpt_cnt = 0
                         for k_idx, k_name in enumerate(kpt_names):
-                            kx, ky = float(kpts_xy[k_idx][0]), float(kpts_xy[k_idx][1])
+                            kx = float(kpts_xy[k_idx][0]) + ox
+                            ky = float(kpts_xy[k_idx][1]) + oy
                             kc = float(kpts_conf[k_idx]) if k_idx < len(kpts_conf) else 1.0
-                            if kx > 1.0 and ky > 1.0 and kc >= 0.20:
+                            if kx > 1.0 and ky > 1.0 and kc >= 0.18:
                                 parsed[k_name] = (
                                     int(np.clip(round(kx), 0, rw - 1)),
                                     int(np.clip(round(ky), 0, rh - 1)),
                                 )
-                        if len(parsed) >= 5:
+                                parsed[k_name + "_conf"] = kc  # Megőrizzük a konfidenciát a mancs-illesztéshez
+                                valid_kpt_cnt += 1
+                        if valid_kpt_cnt >= 5:
                             parsed["bbox"] = yolo_bbox
                             yolo_pose_kpts = parsed
 
                 if result.masks is not None and len(result.masks.data) > best_i:
                     mask_data = result.masks.data[best_i].cpu().numpy()
-                    yolo_seg_mask = (cv2.resize(mask_data, (rw, rh)) > 0.35).astype(np.uint8) * 255
+                    if sub_offset == (0, 0):
+                        yolo_seg_mask = (cv2.resize(mask_data, (rw, rh)) > 0.35).astype(np.uint8) * 255
+                    else:
+                        full_seg = np.zeros((rh, rw), dtype=np.uint8)
+                        full_seg[oy:oy + infer_rh, ox:ox + infer_rw] = (
+                            cv2.resize(mask_data, (infer_rw, infer_rh)) > 0.35
+                        ).astype(np.uint8) * 255
+                        yolo_seg_mask = full_seg
                 elif yolo_pose_kpts is not None:
                     yolo_seg_mask = self._build_capsule_mask_from_pose(yolo_pose_kpts, yolo_bbox, rw, rh)
         return yolo_bbox, yolo_seg_mask, yolo_pose_kpts
 
-    def _get_yolo_result(self, crop_bgr, rw, rh, stream_id, frame_idx, max_age, force_direct=False):
+    def _set_thread_pose(self, stream_id, pose_kpts, frame_idx):
+        self._tls.last_pose = pose_kpts
+        self._tls.last_stream_id = stream_id
+        self.last_sync_pose = pose_kpts
+        if stream_id is not None:
+            with self.stream_lock:
+                self.latest_pose_by_stream[stream_id] = (pose_kpts, frame_idx or 0)
+
+    def _get_yolo_result(self, crop_bgr, rw, rh, stream_id, frame_idx, max_age, force_direct=False, previous_bbox=None):
         if self.yolo_model is None:
             return None, None, max_age + 1
 
-        # Direct hardware GPU execution for Apple Silicon (MPS) and NVIDIA (CUDA):
-        # Executes deep neural net directly on GPU in 4-6ms every 2 frames for continuous GPU utilization
+        sid = stream_id or "default"
+
         if self.device in ("mps", "cuda:0") or stream_id is None or frame_idx is None or force_direct:
             with self.stream_lock:
-                state = self.stream_states.setdefault(stream_id or "default", {})
+                state = self.stream_states.setdefault(sid, {})
                 last_f = state.get("frame_idx", -1)
-                if frame_idx is None or (frame_idx - last_f) >= 2 or state.get("result") is None or force_direct:
-                    try:
-                        yolo_bbox, yolo_seg_mask, yolo_pose_kpts = self._predict_yolo(crop_bgr, rw, rh)
-                        self.last_sync_pose = yolo_pose_kpts
+                cached_res = state.get("result")
+
+            # A GPU inferenciát a stream_lock-on KÍVÜL futtatjuk, hogy a többi szál ne akadjon el
+            if frame_idx is None or (frame_idx - last_f) >= 2 or cached_res is None or force_direct:
+                try:
+                    yolo_bbox, yolo_seg_mask, yolo_pose_kpts = self._predict_yolo(crop_bgr, rw, rh, previous_bbox=previous_bbox)
+                    with self.stream_lock:
+                        state = self.stream_states.setdefault(sid, {})
                         state["result"] = (yolo_bbox, yolo_seg_mask, yolo_pose_kpts)
                         state["frame_idx"] = frame_idx or 0
-                        if stream_id is not None:
-                            self.latest_pose_by_stream[stream_id] = (yolo_pose_kpts, state["frame_idx"])
-                        return yolo_bbox, yolo_seg_mask, 0
-                    except Exception as exc:
-                        if not self._yolo_error_logged:
-                            self.log(f"⚠ YOLO GPU error: {exc}")
-                            self._yolo_error_logged = True
-                        return None, None, max_age + 1
-                else:
-                    res_tuple = state.get("result")
-                    if res_tuple is not None:
-                        return res_tuple[0], res_tuple[1], frame_idx - last_f
+                    self._set_thread_pose(sid, yolo_pose_kpts, frame_idx or 0)
+                    return yolo_bbox, yolo_seg_mask, 0
+                except Exception as exc:
+                    if not self._yolo_error_logged:
+                        self.log(f"⚠ YOLO GPU error: {exc}")
+                        self._yolo_error_logged = True
                     return None, None, max_age + 1
+            else:
+                if cached_res is not None:
+                    self._set_thread_pose(sid, cached_res[2], last_f)
+                    return cached_res[0], cached_res[1], frame_idx - last_f
+                return None, None, max_age + 1
 
+        # CPU / Aszinkron háttérszálas ág
         with self.stream_lock:
             state = self.stream_states.setdefault(
-                stream_id, {"future": None, "result": None, "frame_idx": -1, "pending_frame_idx": -1}
+                sid, {"future": None, "result": None, "frame_idx": -1, "pending_frame_idx": -1}
             )
             future = state.get("future")
             if future is not None and future.done():
@@ -1083,7 +1296,7 @@ class ParallelYoloOpenCVEngine:
                     state["result"] = future.result()
                     state["frame_idx"] = state.get("pending_frame_idx", frame_idx)
                     if state["result"] is not None and len(state["result"]) == 3:
-                        self.latest_pose_by_stream[stream_id] = (state["result"][2], state["frame_idx"])
+                        self.latest_pose_by_stream[sid] = (state["result"][2], state["frame_idx"])
                     self._yolo_error_logged = False
                 except Exception as exc:
                     if not self._yolo_error_logged:
@@ -1094,7 +1307,7 @@ class ParallelYoloOpenCVEngine:
             if state.get("future") is None:
                 state["pending_frame_idx"] = frame_idx
                 state["future"] = self.yolo_executor.submit(
-                    self._predict_yolo, crop_bgr.copy(), rw, rh
+                    self._predict_yolo, crop_bgr.copy(), rw, rh, previous_bbox
                 )
 
             result_age = frame_idx - state.get("frame_idx", -1)
@@ -1102,17 +1315,29 @@ class ParallelYoloOpenCVEngine:
                 res_tuple = state.get("result")
                 if res_tuple is not None:
                     yolo_bbox, yolo_seg_mask = res_tuple[0], res_tuple[1]
-                    if len(res_tuple) >= 3 and res_tuple[2] is not None:
-                        self.last_sync_pose = res_tuple[2]
+                    pose_kpts = res_tuple[2] if len(res_tuple) >= 3 else None
+                    self._tls.last_pose = pose_kpts
+                    self._tls.last_stream_id = sid
+                    self.last_sync_pose = pose_kpts
                 else:
                     yolo_bbox, yolo_seg_mask = None, None
                 return yolo_bbox, yolo_seg_mask, result_age
             return None, None, result_age
 
-    def get_latest_pose_for_bbox(self, bx, by, bw, bh, mw, mh):
+    def get_latest_pose_for_bbox(self, bx, by, bw, bh, mw, mh, stream_id=None):
         if not self.is_rodent_pose:
             return None
-        pose = self.last_sync_pose
+
+        pose = None
+        if stream_id is not None:
+            with self.stream_lock:
+                entry = self.latest_pose_by_stream.get(stream_id)
+                if entry is not None:
+                    pose = entry[0]
+
+        if pose is None:
+            pose = getattr(self._tls, "last_pose", None) or self.last_sync_pose
+
         if not pose or "bbox" not in pose:
             return None
         px, py, pw, ph = pose["bbox"]
@@ -1188,7 +1413,7 @@ class ParallelYoloOpenCVEngine:
         core_mask = cv2.morphologyEx(core_mask, cv2.MORPH_CLOSE, self.k_close_core)
 
         yolo_bbox, yolo_seg_mask, yolo_age = self._get_yolo_result(
-            crop_bgr, rw, rh, stream_id, frame_idx, max(3, int(ai_max_age))
+            crop_bgr, rw, rh, stream_id, frame_idx, max(3, int(ai_max_age)), previous_bbox=previous_bbox
         )
         if yolo_age > max(3, int(ai_max_age)):
             yolo_bbox = None
@@ -1715,6 +1940,8 @@ class DLCAddonManager:
             for r in res["runs"]:
                 run_num = r["run_num"]
                 for d_idx, d in enumerate(r["dips"], start=1):
+                    if not d.get("valid", True):
+                        continue
                     frame = decode_frame_compressed(d["frame_buf"])
                     if frame is None:
                         continue
@@ -1890,11 +2117,74 @@ class DLCAddonManager:
                     skin_score = float(d.get("paw_skin_score", 0.0))
                     head_pitch_down = bool(d.get("head_pitch_down", False))
 
-                    part_label, part_code = self.classify_dip_features(
-                        rel_pos_norm, aspect_ratio, dip_depth, skin_score, head_pitch_down
+                    anat_obj = d.get("anatomy")
+                    part_label, part_code = self.classify_dip_with_anatomy(
+                        dx, dy, anat_obj, rel_pos_norm, aspect_ratio, dip_depth, skin_score, head_pitch_down, move_dir
                     )
                     d["dlc_part"] = part_label
                     d["dlc_code"] = part_code
+
+    @staticmethod
+    def classify_dip_with_anatomy(
+        dip_x, dip_y, anatomy, rel_pos_norm, aspect_ratio, dip_depth, skin_score=0.0, head_pitch_down=False, move_dir=1.0
+    ):
+        """
+        High-precision anatomical dip classifier using 2D Euclidean proximity to actual keypoints.
+        Combines deep keypoint locations (nose_pt, fore_paw_pt, hind_paw_pt, tail_base)
+        with head tilt and pink paw skin chromaticity to prevent bodypart misclassification.
+        """
+        if anatomy is not None:
+            nose_pt = anatomy.get("nose_pt")
+            fore_paw_pt = anatomy.get("fore_paw_pt")
+            hind_paw_pt = anatomy.get("hind_paw_pt")
+            shoulder_pt = anatomy.get("shoulder_pt")
+            hip_pt = anatomy.get("hip_pt")
+            tail_base = anatomy.get("tail_base")
+
+            # 1. Proximity to Nose / Snout
+            if nose_pt is not None:
+                dx_nose = abs(dip_x - nose_pt[0])
+                dy_nose = abs(dip_y - nose_pt[1])
+                # Direct proximity to snout or pitched-down anterior exploration
+                if (dx_nose <= 22 and dy_nose <= 35) or (dx_nose <= 32 and (head_pitch_down or rel_pos_norm >= 0.78)):
+                    return "ORR (Exploráció)", "NOSE"
+
+            # 2. Tail check (posterior to tail base)
+            if tail_base is not None:
+                is_behind_tail = (tail_base[0] - dip_x) * move_dir >= -6
+                if is_behind_tail and abs(dip_x - tail_base[0]) <= 28 and rel_pos_norm <= 0.22:
+                    return "FAROK (Billenés)", "HIND_TAIL"
+
+            # 3. Forelimb Proximity
+            d_fore = 9999.0
+            if fore_paw_pt is not None:
+                dx_fp = abs(dip_x - fore_paw_pt[0])
+                dy_fp = abs(dip_y - fore_paw_pt[1])
+                d_fore = dx_fp + 0.4 * dy_fp
+            elif shoulder_pt is not None:
+                d_fore = abs(dip_x - shoulder_pt[0]) + 10.0
+
+            # 4. Hindlimb Proximity
+            d_hind = 9999.0
+            if hind_paw_pt is not None:
+                dx_hp = abs(dip_x - hind_paw_pt[0])
+                dy_hp = abs(dip_y - hind_paw_pt[1])
+                d_hind = dx_hp + 0.4 * dy_hp
+            elif hip_pt is not None:
+                d_hind = abs(dip_x - hip_pt[0]) + 10.0
+
+            # Disambiguate Forelimb vs Hindlimb based on true anatomical proximity
+            if d_fore < d_hind and d_fore <= 48:
+                if rel_pos_norm >= 0.38:
+                    return "MELLSŐ LÁB (Lábhiba)", "PAW"
+            elif d_hind < d_fore and d_hind <= 48:
+                if rel_pos_norm <= 0.65:
+                    return "HÁTSÓ LÁB (Lábhiba)", "PAW"
+
+        # Fallback to feature-based classifier
+        return DLCAddonManager.classify_dip_features(
+            rel_pos_norm, aspect_ratio, dip_depth, skin_score, head_pitch_down
+        )
 
     @staticmethod
     def classify_dip_features(rel_pos_norm, aspect_ratio, dip_depth, skin_score=0.0, head_pitch_down=False):
@@ -1926,7 +2216,7 @@ class DLCAddonManager:
 
     def harvest_training_samples(self, app_ref, video_paths=None, max_samples_per_video=45, progress_cb=None, stop_event=None):
         """
-        Extracts high-confidence rodent candidate frames with anatomy and bounding boxes from videos.
+        Extracted high-confidence rodent candidate frames with anatomy and bounding boxes from videos.
         Uses fast cap.grab() frame stepping for sub-second scanning speed.
         """
         if video_paths is None:
@@ -1941,8 +2231,9 @@ class DLCAddonManager:
         for v_idx, v_path in enumerate(video_paths):
             if stop_event and stop_event.is_set():
                 break
-            cap = cv2.VideoCapture(v_path)
-            if not cap.isOpened():
+            
+            cap = open_video_accelerated(v_path, use_hw=False, log_cb=self.log)
+            if not cap or not cap.isOpened():
                 continue
 
             auto_res = app_ref.auto_engine.auto_calibrate_from_video(cap, num_bg_samples=24)
@@ -1958,7 +2249,7 @@ class DLCAddonManager:
                 cap.release()
                 continue
             inv_ladder = cv2.bitwise_not(app_ref._create_ladder_mask(base_gray, ladder_t, fault_y_local=fault_y_local))
-
+            
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             total_f = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 300
             fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
@@ -2021,9 +2312,9 @@ class DLCAddonManager:
                         anatomy = app_ref._extract_rodent_anatomy(mask, fc, bbox, move_dir=1.0, crop=crop)
                         sample = {
                             "uid": f"sample_{sample_count}",
-                            "crop": crop.copy(),
+                            "crop_buf": encode_frame_compressed(crop, quality=95),  # <-- Tömörített JPEG RAM-puffer!
+                            "mask_buf": encode_mask_compressed(mask),               # <-- Tömörített PNG maszk!
                             "bbox": bbox,
-                            "mask": mask.copy(),
                             "area": area,
                             "fault_y_local": fault_y_local,
                             "anatomy": anatomy,
@@ -2067,8 +2358,10 @@ class DLCAddonManager:
             return None
 
         import torch
+        from ultralytics import YOLO
+
         train_device = "cpu"
-        if torch.backends.mps.is_available():
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available() and sys.platform == "darwin":
             train_device = "mps"
         elif torch.cuda.is_available():
             train_device = "cuda:0"
@@ -2083,7 +2376,11 @@ class DLCAddonManager:
                 os.makedirs(d_p, exist_ok=True)
 
             for idx, s in enumerate(active):
-                crop = s["crop"]
+                if stop_event and stop_event.is_set():
+                    return None
+                crop, _ = unpack_sample_images(s)
+                if crop is None:
+                    continue
                 bx, by, bw, bh = s["bbox"]
                 rh, rw = crop.shape[:2]
 
@@ -2135,64 +2432,46 @@ class DLCAddonManager:
                 base_pt = "yolov8n.pt"
 
             runs_dir = os.path.join(dataset_dir, "runs")
-            train_script = os.path.join(dataset_dir, "run_train.py")
-            script_code = (
-                "from ultralytics import YOLO\n"
-                f"model = YOLO({repr(base_pt)})\n"
-                "model.train(\n"
-                f"    data={repr(yaml_path)},\n"
-                f"    epochs={int(epochs)},\n"
-                f"    imgsz={int(imgsz)},\n"
-                "    batch=16,\n"
-                f"    device={repr(train_device)},\n"
-                f"    project={repr(runs_dir)},\n"
-                "    name='rodent_run',\n"
-                "    exist_ok=True,\n"
-                "    fliplr=0.0,\n"
-                "    amp=False,\n"
-                "    verbose=False,\n"
-                "    plots=False,\n"
-                "    workers=0,\n"
-                ")\n"
-            )
-            with open(train_script, "w", encoding="utf-8") as sf:
-                sf.write(script_code)
+            tot_ep = max(1, int(epochs))
 
             if progress_cb:
-                progress_cb(5.0, f"Tréning indítása: {len(active)} minta, {epochs} korszak ({train_device.upper()})...")
+                progress_cb(5.0, f"Tréning indítása: {len(active)} minta, {tot_ep} korszak ({train_device.upper()})...")
 
-            proc = subprocess.Popen(
-                [sys.executable, train_script],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
+            # --- IN-PROCESS ULTRALYTICS CALLBACKS (PyInstaller-biztos, nincs sys.executable fork) ---
+            def _on_train_batch_end(trainer):
+                if stop_event and stop_event.is_set():
+                    trainer.stop = True
+
+            def _on_train_epoch_end(trainer):
+                if stop_event and stop_event.is_set():
+                    trainer.stop = True
+                    return
+                curr_ep = int(getattr(trainer, "epoch", 0)) + 1
+                pct = min(95.0, 5.0 + 90.0 * (curr_ep / float(tot_ep)))
+                if progress_cb:
+                    progress_cb(pct, f"Korszak {curr_ep}/{tot_ep}: Betanítás folyamatban ({train_device.upper()})...")
+
+            model = YOLO(base_pt)
+            model.add_callback("on_train_batch_end", _on_train_batch_end)
+            model.add_callback("on_train_epoch_end", _on_train_epoch_end)
+            model.train(
+                data=yaml_path,
+                epochs=tot_ep,
+                imgsz=int(imgsz),
+                batch=16,
+                device=train_device,
+                project=runs_dir,
+                name="rodent_run",
+                exist_ok=True,
+                fliplr=0.0,
+                amp=False,
+                verbose=False,
+                plots=False,
+                workers=0,
             )
 
-            current_ep = 0
-            for line in iter(proc.stdout.readline, ""):
-                if not line:
-                    break
-                line_str = line.strip()
-                if not line_str:
-                    continue
-                parts = line_str.split()
-                for p in parts:
-                    if "/" in p:
-                        sub = p.split("/")
-                        if len(sub) == 2 and sub[0].isdigit() and sub[1].isdigit():
-                            ep_num = int(sub[0])
-                            tot_ep = int(sub[1])
-                            if tot_ep == int(epochs):
-                                current_ep = ep_num
-                                pct = min(95.0, 5.0 + 90.0 * (current_ep / float(tot_ep)))
-                                if progress_cb:
-                                    progress_cb(pct, f"Korszak {current_ep}/{tot_ep}: Betanítás folyamatban ({train_device.upper()})...")
-                                break
-                if progress_cb and ("loss" in line_str.lower() or "map" in line_str.lower()):
-                    progress_cb(min(95.0, 5.0 + 90.0 * (current_ep / float(epochs))), line_str[:65])
-
-            proc.wait()
+            if stop_event and stop_event.is_set():
+                return None
 
             best_pt = os.path.join(runs_dir, "rodent_run", "weights", "best.pt")
             if not os.path.exists(best_pt):
@@ -2203,7 +2482,7 @@ class DLCAddonManager:
                 shutil.copy2(best_pt, target_pt)
                 try:
                     local_pt = get_resource_path("rodent_detector.pt")
-                    if os.path.abspath(local_pt) != os.path.abspath(target_pt):
+                    if os.path.abspath(local_pt) != os.path.abspath(target_pt) and os.access(os.path.dirname(local_pt), os.W_OK):
                         shutil.copy2(best_pt, local_pt)
                 except Exception:
                     pass
@@ -2213,7 +2492,7 @@ class DLCAddonManager:
                     if hasattr(app_ref, "_refresh_kpi_summary"):
                         app_ref.root.after(0, app_ref._refresh_kpi_summary)
                 if progress_cb:
-                    progress_cb(100.0, f"✅ Betanítás sikeres! Modell mentve: rodent_detector.pt")
+                    progress_cb(100.0, "✅ Betanítás sikeres! Modell mentve: rodent_detector.pt")
                 return target_pt
             else:
                 if progress_cb:
@@ -2229,16 +2508,22 @@ class DLCAddonManager:
 
     def train_rodent_pose_from_samples(self, app_ref, samples, epochs=12, imgsz=256, progress_cb=None, stop_event=None):
         """
-        Fine-tunes the 9-keypoint Rodent Pose AI (mouse_pose_ai.pt) strictly from active samples.
-        Specifically optimizes paw detection (Forepaw and Hindpaw keypoints).
-        Any sample with s['excluded'] == True is strictly excluded.
-        Generates:
-        1. Full ladder crop (wide-context spatial layout)
-        2. High-resolution rodent and ventral limb crop (detailed paw textures & rung contacts)
+        PyInstaller-safe & Unicode-safe 9-keypoint Rodent Pose AI trainer (mouse_pose_ai.pt).
+        Runs in-process on the background worker thread using Ultralytics callbacks
+        (eliminates sys.executable fork-bombs in frozen .exe / .app builds).
         """
         active = [s for s in samples if not s.get("excluded", False)]
         omitted_count = len(samples) - len(active)
-        self.log(f"🧠 [Paw AI Trainer] Dataset summary: {len(active)} active rodent samples. {omitted_count} excluded samples completely omitted from training.")
+        self.log(
+            f"🧠 [Paw AI Trainer] Dataset summary: {len(active)} active rodent samples. "
+            f"{omitted_count} excluded samples completely omitted from training."
+        )
+        manual_pts_count = sum(
+            sum(1 for k in ["fore_paw_pt", "hind_paw_pt", "nose_pt", "tail_base"] if (s.get("anatomy") or {}).get(f"{k}_manual"))
+            for s in active
+        )
+        if manual_pts_count > 0:
+            self.log(f"🎯 [Paw AI Trainer] {manual_pts_count} db kézzel bejelölt mancs/testrész kulcspont szerepel a tanítóhalmazban!")
 
         if len(active) < 6:
             self.log(f"⚠ [Paw AI Trainer] Need at least 6 active samples (have {len(active)} active, {omitted_count} excluded).")
@@ -2247,8 +2532,10 @@ class DLCAddonManager:
             return None
 
         import torch
+        from ultralytics import YOLO
+
         train_device = "cpu"
-        if torch.backends.mps.is_available():
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available() and sys.platform == "darwin":
             train_device = "mps"
         elif torch.cuda.is_available():
             train_device = "cuda:0"
@@ -2268,16 +2555,21 @@ class DLCAddonManager:
             ]
 
             for idx, s in enumerate(active):
-                crop = s["crop"]
+                if stop_event and stop_event.is_set():
+                    return None
+
+                crop, _ = unpack_sample_images(s)
+                if crop is None:
+                    continue
                 bx, by, bw, bh = s["bbox"]
                 rh, rw = crop.shape[:2]
                 anat = s.get("anatomy") or {}
 
-                is_val = (idx % 5 == 0)
+                # Garantáljuk, hogy kis mintaszámnál is legyen validációs kép
+                is_val = (idx % 5 == 0) or (idx == len(active) - 1 and idx < 5)
                 tgt_img = img_va if is_val else img_tr
                 tgt_lbl = lbl_va if is_val else lbl_tr
 
-                # Determine keypoint coordinates in full-crop space
                 kpts_coords = {}
                 for k_name in kpt_order:
                     pt = anat.get(k_name)
@@ -2303,7 +2595,7 @@ class DLCAddonManager:
                         else:
                             kpts_coords[k_name] = (float(max(0, bx - 15)), float(by + bh * 0.5))
 
-                # 1. Full Ladder Crop (wide spatial context)
+                # 1. Teljes létra-kivágás (tág térbeli kontextus)
                 cx_n = np.clip((bx + bw * 0.5) / float(rw), 0.01, 0.99)
                 cy_n = np.clip((by + bh * 0.5) / float(rh), 0.01, 0.99)
                 bw_n = np.clip(bw / float(rw), 0.02, 0.98)
@@ -2314,15 +2606,18 @@ class DLCAddonManager:
                     kx, ky = kpts_coords[k_name]
                     kx_n = np.clip(kx / float(rw), 0.001, 0.999)
                     ky_n = np.clip(ky / float(rh), 0.001, 0.999)
-                    lbl_parts_full.append(f"{kx_n:.6f} {ky_n:.6f} 2")
+                    # v=2 csak valós anatómiai vagy kézzel megjelölt pont esetén, fallback esetén v=0 (loss nem büntet)
+                    v_flag = 2 if (anat.get(k_name) is not None) else 0
+                    lbl_parts_full.append(f"{kx_n:.6f} {ky_n:.6f} {v_flag}")
                 lbl_line_full = " ".join(lbl_parts_full) + "\n"
 
                 stem_full = f"pose_f_{idx:04d}"
-                cv2.imwrite(os.path.join(tgt_img, f"{stem_full}.jpg"), crop)
+                # UNICODE-BIZTOS MENTÉS (cv2.imwrite helyett)
+                save_image_unicode(os.path.join(tgt_img, f"{stem_full}.jpg"), crop)
                 with open(os.path.join(tgt_lbl, f"{stem_full}.txt"), "w", encoding="utf-8") as lf:
                     lf.write(lbl_line_full)
 
-                # 2. Rodent & Paw Zoom Crop (High Resolution context focused on paw contacts)
+                # 2. Egérre és mancsokra fókuszált nagyfelbontású kivágás
                 pad_w = int(max(40, bw * 0.35))
                 pad_h_top = int(max(20, bh * 0.25))
                 pad_h_bot = int(max(30, bh * 0.45))
@@ -2346,17 +2641,20 @@ class DLCAddonManager:
                         kx, ky = kpts_coords[k_name]
                         rel_kx = np.clip((kx - c_x1) / float(cw), 0.001, 0.999)
                         rel_ky = np.clip((ky - c_y1) / float(ch), 0.001, 0.999)
-                        lbl_parts_ctx.append(f"{rel_kx:.6f} {rel_ky:.6f} 2")
+                        v_flag = 2 if (anat.get(k_name) is not None) else 0
+                        lbl_parts_ctx.append(f"{rel_kx:.6f} {rel_ky:.6f} {v_flag}")
                     lbl_line_ctx = " ".join(lbl_parts_ctx) + "\n"
 
                     stem_ctx = f"pose_c_{idx:04d}"
-                    cv2.imwrite(os.path.join(tgt_img, f"{stem_ctx}.jpg"), ctx_crop)
+                    save_image_unicode(os.path.join(tgt_img, f"{stem_ctx}.jpg"), ctx_crop)
                     with open(os.path.join(tgt_lbl, f"{stem_ctx}.txt"), "w", encoding="utf-8") as lf:
                         lf.write(lbl_line_ctx)
 
+            # POSIX perjelek használata a YAML-ban, hogy Windows alatt se akadjon el a parser
+            safe_ds_path = dataset_dir.replace("\\", "/")
             yaml_path = os.path.join(dataset_dir, "mouse_pose.yaml")
             yaml_content = (
-                f"path: {dataset_dir}\n"
+                f"path: '{safe_ds_path}'\n"
                 f"train: images/train\n"
                 f"val: images/val\n"
                 f"kpt_shape: [9, 3]\n"
@@ -2369,69 +2667,63 @@ class DLCAddonManager:
 
             base_pt = get_resource_path("mouse_pose_ai.pt")
             if not os.path.exists(base_pt):
+                base_pt = os.path.join(SAFE_BASE_DIR, "mouse_pose_ai.pt")
+            if not os.path.exists(base_pt):
                 base_pt = get_resource_path("yolov8n-pose.pt")
             if not os.path.exists(base_pt):
                 base_pt = "yolov8n-pose.pt"
 
             runs_dir = os.path.join(dataset_dir, "runs")
-            train_script = os.path.join(dataset_dir, "run_train.py")
-            script_code = (
-                "from ultralytics import YOLO\n"
-                f"model = YOLO({repr(base_pt)})\n"
-                "model.train(\n"
-                f"    data={repr(yaml_path)},\n"
-                f"    epochs={int(epochs)},\n"
-                f"    imgsz={int(imgsz)},\n"
-                "    batch=16,\n"
-                f"    device={repr(train_device)},\n"
-                f"    project={repr(runs_dir)},\n"
-                "    name='mouse_pose_run',\n"
-                "    exist_ok=True,\n"
-                "    fliplr=0.0,\n"
-                "    amp=False,\n"
-                "    verbose=False,\n"
-                "    plots=False,\n"
-                "    workers=0,\n"
-                ")\n"
-            )
-            with open(train_script, "w", encoding="utf-8") as sf:
-                sf.write(script_code)
+            tot_ep = max(1, int(epochs))
 
             if progress_cb:
-                progress_cb(5.0, f"Tréning indítása: {len(active)} aktív minta, {epochs} korszak ({train_device.upper()})...")
+                progress_cb(5.0, f"Tréning indítása: {len(active)} aktív minta, {tot_ep} korszak ({train_device.upper()})...")
 
-            proc = subprocess.Popen(
-                [sys.executable, train_script],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
+            # --- IN-PROCESS ULTRALYTICS CALLBACKS (PyInstaller-biztos) ---
+            def _on_train_batch_end(trainer):
+                if stop_event and stop_event.is_set():
+                    trainer.stop = True
+
+            def _on_train_epoch_end(trainer):
+                if stop_event and stop_event.is_set():
+                    trainer.stop = True
+                    return
+                curr_ep = int(getattr(trainer, "epoch", 0)) + 1
+                pct = min(95.0, 5.0 + 90.0 * (curr_ep / float(tot_ep)))
+                loss_str = ""
+                try:
+                    tloss = getattr(trainer, "tloss", None)
+                    if tloss is not None:
+                        vals = tloss.detach().cpu().numpy().flatten()
+                        if len(vals) >= 2:
+                            loss_str = f" | BoxLoss: {vals[0]:.3f}, PoseLoss: {vals[1]:.3f}"
+                except Exception:
+                    pass
+                if progress_cb:
+                    progress_cb(pct, f"Korszak {curr_ep}/{tot_ep}: 9-pontos Paw Pose tréning ({train_device.upper()}){loss_str}")
+
+            model = YOLO(base_pt)
+            model.add_callback("on_train_batch_end", _on_train_batch_end)
+            model.add_callback("on_train_epoch_end", _on_train_epoch_end)
+
+            model.train(
+                data=yaml_path,
+                epochs=tot_ep,
+                imgsz=int(imgsz),
+                batch=min(16, max(2, len(active))),
+                device=train_device,
+                project=runs_dir,
+                name="mouse_pose_run",
+                exist_ok=True,
+                fliplr=0.0,
+                amp=False,
+                verbose=False,
+                plots=False,
+                workers=0,  # KRITIKUS PyInstallerhez és macOS/Windows stabilitáshoz!
             )
 
-            current_ep = 0
-            for line in iter(proc.stdout.readline, ""):
-                if not line:
-                    break
-                line_str = line.strip()
-                if not line_str:
-                    continue
-                parts = line_str.split()
-                for p in parts:
-                    if "/" in p:
-                        sub = p.split("/")
-                        if len(sub) == 2 and sub[0].isdigit() and sub[1].isdigit():
-                            ep_num = int(sub[0])
-                            tot_ep = int(sub[1])
-                            if tot_ep == int(epochs):
-                                current_ep = ep_num
-                                pct = min(95.0, 5.0 + 90.0 * (current_ep / float(tot_ep)))
-                                if progress_cb:
-                                    progress_cb(pct, f"Korszak {current_ep}/{tot_ep}: 9-pontos Paw Pose tréning ({train_device.upper()})...")
-                                break
-                if progress_cb and ("loss" in line_str.lower() or "map" in line_str.lower()):
-                    progress_cb(min(95.0, 5.0 + 90.0 * (current_ep / float(epochs))), line_str[:65])
-
-            proc.wait()
+            if stop_event and stop_event.is_set():
+                return None
 
             best_pt = os.path.join(runs_dir, "mouse_pose_run", "weights", "best.pt")
             if not os.path.exists(best_pt):
@@ -2442,17 +2734,18 @@ class DLCAddonManager:
                 shutil.copy2(best_pt, target_pt)
                 try:
                     local_pt = get_resource_path("mouse_pose_ai.pt")
-                    if os.path.abspath(local_pt) != os.path.abspath(target_pt):
+                    if os.path.abspath(local_pt) != os.path.abspath(target_pt) and os.access(os.path.dirname(local_pt), os.W_OK):
                         shutil.copy2(best_pt, local_pt)
                 except Exception:
                     pass
+
                 self.log(f"✅ [Paw AI Trainer] Custom 9-keypoint Paw Pose model saved: {target_pt}")
                 if hasattr(app_ref, "hybrid_locator"):
                     app_ref.hybrid_locator._init_yolo()
                     if hasattr(app_ref, "_refresh_kpi_summary"):
                         app_ref.root.after(0, app_ref._refresh_kpi_summary)
                 if progress_cb:
-                    progress_cb(100.0, f"✅ Betanítás sikeres! Modell mentve: mouse_pose_ai.pt (Mancs & Tartás specializáció)")
+                    progress_cb(100.0, "✅ Betanítás sikeres! Modell mentve: mouse_pose_ai.pt (Mancs & Tartás specializáció)")
                 return target_pt
             else:
                 if progress_cb:
@@ -2497,7 +2790,7 @@ class DLCAddonManager:
                     continue
 
                 active_count += 1
-                crop = s.get("crop")
+                crop, _ = unpack_sample_images(s)
                 if crop is None:
                     s["ai_pred_bbox"] = None
                     s["ai_pred_pose"] = None
@@ -2715,30 +3008,24 @@ class DLCAddonManager:
                 base_pose_pt = "yolov8n-pose.pt"
 
             runs_dir = os.path.join(dataset_dir, "runs")
-            train_script = os.path.join(dataset_dir, "run_pose_train.py")
-            script_code = (
-                "from ultralytics import YOLO\n"
-                f"model = YOLO({repr(base_pose_pt)})\n"
-                "model.train(\n"
-                f"    data={repr(yaml_path)},\n"
-                f"    epochs={int(epochs)},\n"
-                f"    imgsz={int(imgsz)},\n"
-                "    batch=16,\n"
-                f"    device={repr(train_device)},\n"
-                f"    project={repr(runs_dir)},\n"
-                "    name='mouse_pose',\n"
-                "    exist_ok=True,\n"
-                "    fliplr=0.0,\n"
-                "    amp=False,\n"
-                "    verbose=False,\n"
-                "    plots=False,\n"
-                "    workers=0,\n"
-                ")\n"
+            # In-process tréning (PyInstaller-biztos: nincs sys.executable fork)
+            from ultralytics import YOLO
+            pose_model = YOLO(base_pose_pt)
+            pose_model.train(
+                data=yaml_path,
+                epochs=int(epochs),
+                imgsz=int(imgsz),
+                batch=16,
+                device=train_device,
+                project=runs_dir,
+                name="mouse_pose",
+                exist_ok=True,
+                fliplr=0.0,
+                amp=False,
+                verbose=False,
+                plots=False,
+                workers=0,
             )
-            with open(train_script, "w", encoding="utf-8") as sf:
-                sf.write(script_code)
-
-            subprocess.run([sys.executable, train_script], check=False)
 
             best_pt = os.path.join(runs_dir, "mouse_pose", "weights", "best.pt")
             if not os.path.exists(best_pt):
@@ -2749,7 +3036,7 @@ class DLCAddonManager:
                 shutil.copy2(best_pt, target_pt)
                 try:
                     local_pt = get_resource_path("mouse_pose_ai.pt")
-                    if os.path.abspath(local_pt) != os.path.abspath(target_pt):
+                    if os.path.abspath(local_pt) != os.path.abspath(target_pt) and os.access(os.path.dirname(local_pt), os.W_OK):
                         shutil.copy2(best_pt, local_pt)
                 except Exception:
                     pass
@@ -3107,6 +3394,10 @@ class PerVideoIDTrackerApp:
         self.btn_add_vid = ttk.Button(
             toolbar, text=self.tr("btn_add_vid"), command=self.browse_videos, style="Teal.TButton"
         )
+        self.btn_add_url = ttk.Button(
+            toolbar, text="🌐 URL / Teams", command=self.add_url_or_teams_dialog, style="Primary.TButton"
+        )
+        self.btn_add_url.pack(side="left", padx=(0, 6))
         self.btn_add_vid.pack(side="left", padx=(0, 6))
         ToolTip(self.btn_add_vid, lambda: self.tr("tt_add_vid"))
 
@@ -3637,6 +3928,59 @@ class PerVideoIDTrackerApp:
         )
         chk_ai.pack(side="left")
 
+        # Manual Annotation & Keypoint Labeling Bar
+        annot_box = tk.Frame(left_panel, bg=P["bg_card"], padx=6, pady=4, highlightthickness=1, highlightbackground=P["border"])
+        annot_box.pack(fill="x", pady=(0, 6))
+
+        tk.Label(
+            annot_box, text="🎯 " + self.tr("lbl_annot_tool_title", default="Kézi Pontozó:"),
+            bg=P["bg_card"], fg=P["cyan"], font=(self.ui_font, 9, "bold")
+        ).pack(side="left", padx=(2, 6))
+
+        var_annot_tool = tk.StringVar(value="pan")
+        tool_btns = {}
+        current_transform = {}
+
+        def _update_tool_buttons():
+            curr = var_annot_tool.get()
+            for key, btn in tool_btns.items():
+                if key == curr:
+                    btn.config(relief="sunken", bg=P["bg_panel"])
+                else:
+                    btn.config(relief="flat", bg=P["bg_main"])
+            if curr == "pan":
+                canvas_view.config(cursor="fleur")
+            else:
+                canvas_view.config(cursor="crosshair")
+
+        def _set_tool(tool_key):
+            var_annot_tool.set(tool_key)
+            _update_tool_buttons()
+
+        tools_data = [
+            ("pan", "✋ Pásztázás (0)", P["text_muted"]),
+            ("fore_paw_pt", "🐾 Mellső mancs (1)", P["emerald"]),
+            ("hind_paw_pt", "🐾 Hátsó mancs (2)", "#C084FC"),
+            ("nose_pt", "🔴 Orr (3)", P["danger"]),
+            ("tail_base", "🔵 Faroktő (4)", P["cyan"]),
+        ]
+
+        for t_key, t_txt, t_fg in tools_data:
+            b = tk.Button(
+                annot_box, text=t_txt, font=(self.ui_font, 8, "bold"),
+                bg=P["bg_main"], fg=t_fg, activebackground=P["bg_panel"],
+                activeforeground=t_fg, padx=6, pady=2, bd=1,
+                command=lambda k=t_key: _set_tool(k)
+            )
+            b.pack(side="left", padx=2)
+            tool_btns[t_key] = b
+
+        lbl_annot_hint = tk.Label(
+            annot_box, text="[Kattints a mintára a mancs bejelöléséhez!]",
+            bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 8)
+        )
+        lbl_annot_hint.pack(side="right", padx=(4, 2))
+
         # Canvas View
         canvas_view = tk.Canvas(left_panel, bg=P["bg_main"], highlightthickness=1, highlightbackground=P["border"], cursor="crosshair")
         canvas_view.pack(fill="both", expand=True, pady=(0, 6))
@@ -3761,16 +4105,19 @@ class PerVideoIDTrackerApp:
                 return
 
             sample = samples_list[current_idx[0]]
-            crop = sample["crop"]
+            
+            
+            crop, mask = unpack_sample_images(sample)
+            if crop is None:
+                return
             ch_img, cw_img = crop.shape[:2]
             vis = crop.copy()
 
-            # 1. Ladder line
+            
             f_y = sample.get("fault_y_local", int(ch_img * 0.6))
             cv2.line(vis, (0, f_y), (cw_img, f_y), (60, 70, 85), 1, cv2.LINE_AA)
 
             # 2. Contour silhouette
-            mask = sample.get("mask")
             if mask is not None:
                 cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 cv2.drawContours(vis, cnts, -1, (0, 230, 255), 1, cv2.LINE_AA)
@@ -3792,20 +4139,29 @@ class PerVideoIDTrackerApp:
                 if tcx > 0 and tcy > 0:
                     cv2.circle(vis, (tcx, tcy), 5, (245, 158, 11), -1)
                     cv2.putText(vis, "TORSO", (tcx - 18, tcy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (245, 158, 11), 1)
-                n_pt = anat.get("nose_pt")
-                if n_pt:
-                    cv2.circle(vis, n_pt, 5, (239, 68, 68), -1)
-                    cv2.putText(vis, "NOSE", (n_pt[0] + 6, n_pt[1] + 3), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (239, 68, 68), 1)
-                t_pt = anat.get("tail_base")
-                if t_pt:
-                    cv2.circle(vis, t_pt, 5, (59, 130, 246), -1)
-                    cv2.putText(vis, "TAIL", (t_pt[0] - 32, t_pt[1] + 3), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (59, 130, 246), 1)
-                fp = anat.get("fore_paw_pt")
-                hp = anat.get("hind_paw_pt")
-                if fp:
-                    cv2.circle(vis, fp, 4, (16, 185, 129), -1)
-                if hp:
-                    cv2.circle(vis, hp, 4, (168, 85, 247), -1)
+
+                keypoint_specs = [
+                    ("fore_paw_pt", (16, 235, 129), "🐾 MELLSŐ MANCS (KÉZI)", (16, 185, 129), "FOREPAW"),
+                    ("hind_paw_pt", (210, 85, 247), "🐾 HÁTSÓ MANCS (KÉZI)", (168, 85, 247), "HINDPAW"),
+                    ("nose_pt", (0, 0, 255), "🔴 ORR (KÉZI)", (239, 68, 68), "NOSE"),
+                    ("tail_base", (255, 140, 0), "🔵 FAROKTŐ (KÉZI)", (59, 130, 246), "TAIL"),
+                ]
+                for k_name, man_col, man_label, auto_col, auto_label in keypoint_specs:
+                    pt = anat.get(k_name)
+                    if pt:
+                        pt_int = (int(pt[0]), int(pt[1]))
+                        if anat.get(f"{k_name}_manual", False):
+                            cv2.circle(vis, pt_int, 9, man_col, 2, cv2.LINE_AA)
+                            cv2.circle(vis, pt_int, 4, man_col, -1, cv2.LINE_AA)
+                            cv2.circle(vis, pt_int, 1, (255, 255, 255), -1, cv2.LINE_AA)
+                            cv2.line(vis, (pt_int[0] - 12, pt_int[1]), (pt_int[0] + 12, pt_int[1]), man_col, 1, cv2.LINE_AA)
+                            cv2.line(vis, (pt_int[0], pt_int[1] - 12), (pt_int[0], pt_int[1] + 12), man_col, 1, cv2.LINE_AA)
+                            cv2.putText(vis, man_label, (pt_int[0] + 10, max(14, pt_int[1] - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.38, man_col, 1, cv2.LINE_AA)
+                        else:
+                            cv2.circle(vis, pt_int, 4 if "paw" in k_name else 5, auto_col, -1)
+                            if auto_label in ("NOSE", "TAIL"):
+                                shift_x = 6 if auto_label == "NOSE" else -34
+                                cv2.putText(vis, auto_label, (pt_int[0] + shift_x, pt_int[1] + 3), cv2.FONT_HERSHEY_SIMPLEX, 0.38, auto_col, 1)
 
             # 5. AI Predicted Box & Specialized Paws (ONLY displayed on active, non-excluded samples!)
             if var_show_ai.get() and not sample.get("excluded", False):
@@ -3857,6 +4213,7 @@ class PerVideoIDTrackerApp:
                 c_y2 = min(ch_img, by + bh + margin_y)
                 disp = vis[c_y1:c_y2, c_x1:c_x2]
             else:
+                c_x1, c_y1 = 0, 0
                 disp = vis
 
             # Zoom & Pan
@@ -3868,12 +4225,26 @@ class PerVideoIDTrackerApp:
                 x1 = int(np.clip(cx - vw * 0.5, 0, disp.shape[1] - vw))
                 y1 = int(np.clip(cy - vh * 0.5, 0, disp.shape[0] - vh))
                 disp = disp[y1:y1 + int(vh), x1:x1 + int(vw)]
+            else:
+                x1, y1 = 0, 0
 
             cw = max(400, canvas_view.winfo_width())
             ch = max(300, canvas_view.winfo_height())
             scale = min(cw / float(disp.shape[1]), ch / float(disp.shape[0]))
             tw = max(10, int(disp.shape[1] * scale))
             th = max(10, int(disp.shape[0] * scale))
+
+            current_transform["c_x1"] = c_x1
+            current_transform["c_y1"] = c_y1
+            current_transform["disp_x1"] = x1
+            current_transform["disp_y1"] = y1
+            current_transform["scale"] = scale
+            current_transform["offset_x"] = (cw - tw) // 2
+            current_transform["offset_y"] = (ch - th) // 2
+            current_transform["tw"] = tw
+            current_transform["th"] = th
+            current_transform["cw_img"] = cw_img
+            current_transform["ch_img"] = ch_img
 
             resized = cv2.resize(disp, (tw, th), interpolation=cv2.INTER_LINEAR)
             ok, buf = cv2.imencode(".ppm", resized)
@@ -4115,8 +4486,67 @@ class PerVideoIDTrackerApp:
         def _on_drag_start(event):
             view_state["drag_start"] = (event.x, event.y)
 
+        def _canvas_to_crop(canvas_x, canvas_y):
+            if not current_transform or "tw" not in current_transform:
+                return None
+            tw = current_transform["tw"]
+            th = current_transform["th"]
+            ox = current_transform["offset_x"]
+            oy = current_transform["offset_y"]
+            rx = canvas_x - ox
+            ry = canvas_y - oy
+            if rx < 0 or rx >= tw or ry < 0 or ry >= th:
+                return None
+            scale = current_transform["scale"]
+            sub_x = rx / scale
+            sub_y = ry / scale
+            disp_x = current_transform["disp_x1"] + sub_x
+            disp_y = current_transform["disp_y1"] + sub_y
+            crop_x = current_transform["c_x1"] + disp_x
+            crop_y = current_transform["c_y1"] + disp_y
+            crop_x = int(np.clip(crop_x, 0, current_transform["cw_img"] - 1))
+            crop_y = int(np.clip(crop_y, 0, current_transform["ch_img"] - 1))
+            return (crop_x, crop_y)
+
+        def _on_canvas_click(event):
+            tool = var_annot_tool.get()
+            if tool == "pan":
+                _on_drag_start(event)
+                return
+            if not samples_list or current_idx[0] < 0 or current_idx[0] >= len(samples_list):
+                return
+            pt = _canvas_to_crop(event.x, event.y)
+            if pt is None:
+                return
+            sample = samples_list[current_idx[0]]
+            if "anatomy" not in sample or not isinstance(sample["anatomy"], dict):
+                sample["anatomy"] = {}
+            sample["anatomy"][tool] = pt
+            sample["anatomy"][f"{tool}_manual"] = True
+            sample["excluded"] = False
+
+            names = {
+                "fore_paw_pt": "🐾 Mellső mancs",
+                "hind_paw_pt": "🐾 Hátsó mancs",
+                "nose_pt": "🔴 Orr",
+                "tail_base": "🔵 Faroktő"
+            }
+            lbl_name = names.get(tool, tool)
+            txt_log.insert("end", f"🎯 Kézi jelölés: {lbl_name} rögzítve ({pt[0]}, {pt[1]})!\n")
+            txt_log.see("end")
+
+            # Automatikus léptetés a következő testrészre:
+            if tool == "fore_paw_pt":
+                _set_tool("hind_paw_pt")
+            elif tool == "hind_paw_pt":
+                _set_tool("nose_pt")
+            elif tool == "nose_pt":
+                _set_tool("tail_base")
+
+            _render_current_sample()
+
         def _on_drag_motion(event):
-            if view_state["drag_start"] and view_state["zoom"] > 1.0:
+            if var_annot_tool.get() == "pan" and view_state["drag_start"] and view_state["zoom"] > 1.0:
                 dx = event.x - view_state["drag_start"][0]
                 dy = event.y - view_state["drag_start"][1]
                 view_state["drag_start"] = (event.x, event.y)
@@ -4139,7 +4569,7 @@ class PerVideoIDTrackerApp:
         canvas_view.bind("<MouseWheel>", _on_wheel)
         canvas_view.bind("<Button-4>", _on_wheel)
         canvas_view.bind("<Button-5>", _on_wheel)
-        canvas_view.bind("<ButtonPress-1>", _on_drag_start)
+        canvas_view.bind("<ButtonPress-1>", _on_canvas_click)
         canvas_view.bind("<B1-Motion>", _on_drag_motion)
         canvas_view.bind("<Configure>", lambda e: _render_current_sample())
 
@@ -4148,6 +4578,17 @@ class PerVideoIDTrackerApp:
         preview_win.bind("<space>", _toggle_exclude)
         preview_win.bind("<x>", _toggle_exclude)
         preview_win.bind("<Escape>", lambda e: preview_win.destroy())
+
+        for k in ("0", "<p>", "<P>"):
+            preview_win.bind(k, lambda e: _set_tool("pan"))
+        for k in ("1", "<m>", "<M>"):
+            preview_win.bind(k, lambda e: _set_tool("fore_paw_pt"))
+        for k in ("2", "<h>", "<H>"):
+            preview_win.bind(k, lambda e: _set_tool("hind_paw_pt"))
+        for k in ("3", "<o>", "<O>"):
+            preview_win.bind(k, lambda e: _set_tool("nose_pt"))
+        for k in ("4", "<t>", "<T>"):
+            preview_win.bind(k, lambda e: _set_tool("tail_base"))
 
         def _on_window_close():
             harvest_stop_event.set()
@@ -4208,6 +4649,8 @@ class PerVideoIDTrackerApp:
             "use_kalman": self.var_use_kalman.get(),
             "dlc_superanimal": self.var_dlc_superanimal.get(),
             "dlc_export_train": self.var_dlc_export_train.get(),
+            "lock_lr_direction": self.var_lock_lr_direction.get(),
+            "protocol_runs": self.var_protocol_runs.get(),
             "geometry": self.saved_geometry
         }
 
@@ -4244,9 +4687,13 @@ class PerVideoIDTrackerApp:
             ("use_kalman", self.var_use_kalman),
             ("dlc_superanimal", self.var_dlc_superanimal),
             ("dlc_export_train", self.var_dlc_export_train),
+            ("lock_lr_direction", self.var_lock_lr_direction),
         ]:
             if key in data:
                 var.set(bool(data[key]))
+
+        if "protocol_runs" in data and str(data["protocol_runs"]).strip():
+            self.var_protocol_runs.set(str(data["protocol_runs"]))
 
         geom = data.get("geometry")
         if isinstance(geom, dict) and all(k in geom for k in ("rx", "ry", "rw", "rh", "left_gate_x", "right_gate_x")):
@@ -4357,6 +4804,108 @@ class PerVideoIDTrackerApp:
         self._refresh_kpi_cards()
         self.log(f"+ {added} videos added. (Total: {len(self.video_data)})")
         self.progress_lbl.config(text=self.tr("prog_idle", done=0, total=len(self.video_data)))
+
+    def add_url_or_teams_dialog(self):
+        if self.is_running:
+            return
+        P = self.PALETTE
+        dlg = tk.Toplevel(self.root)
+        dlg.title("🌐 Teams / SharePoint / Web Videó Hozzáadása")
+        dlg.geometry("580x270")
+        dlg.configure(bg=P["bg_card"])
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        box = tk.Frame(dlg, bg=P["bg_card"], padx=20, pady=16)
+        box.pack(fill="both", expand=True)
+
+        tk.Label(
+            box, text="Videó URL (Direct MP4 / OneDrive / SharePoint / Google Drive):",
+            bg=P["bg_card"], fg=P["text_main"], font=(self.ui_font, 10, "bold")
+        ).pack(anchor="w")
+
+        url_entry = tk.Entry(
+            box, font=(self.mono_font, 10), bg=P["bg_main"], fg=P["cyan"],
+            insertbackground=P["cyan"], relief="flat", highlightthickness=1, highlightbackground=P["border"]
+        )
+        url_entry.pack(fill="x", pady=(6, 10), ipady=5)
+        url_entry.focus_force()
+
+        id_row = tk.Frame(box, bg=P["bg_card"])
+        id_row.pack(fill="x", pady=(0, 12))
+        tk.Label(id_row, text="Egyed ID:", bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9)).pack(side="left")
+        id_entry = tk.Entry(
+            id_row, width=10, font=(self.mono_font, 10, "bold"), justify="center",
+            bg=P["bg_main"], fg=P["emerald"], insertbackground=P["emerald"], relief="flat"
+        )
+        id_entry.insert(0, str(len(self.video_data) + 1))
+        id_entry.pack(side="left", padx=(8, 0), ipady=3)
+
+        def _open_local_teams_folder():
+            # Automatikusan megkeresi a gépben a szinkronizált OneDrive / Teams / SharePoint mappákat
+            home = os.path.expanduser("~")
+            candidates = [
+                os.environ.get("OneDriveCommercial", ""),
+                os.environ.get("OneDrive", ""),
+                os.path.join(home, "Library", "CloudStorage"),  # macOS OneDrive / SharePoint helye
+            ]
+            try:
+                home_entries = os.listdir(home)
+            except OSError:
+                home_entries = []
+            for p in home_entries:
+                if any(k in p.lower() for k in ("onedrive", "sharepoint", "teams")):
+                    candidates.append(os.path.join(home, p))
+            start_dir = next((c for c in candidates if c and os.path.exists(c)), home)
+            dlg.destroy()
+            files = filedialog.askopenfilenames(
+                initialdir=start_dir,
+                title="Válassz videót a szinkronizált Teams / OneDrive mappából",
+                filetypes=[("Video files", "*.mp4 *.mov *.avi *.mkv *.MP4 *.MOV *.AVI *.MKV"), ("All files", "*.*")]
+            )
+            if files:
+                self._append_video_list(files)
+
+        def _submit_url(event=None):
+            raw_url = url_entry.get().strip()
+            subj_id = id_entry.get().strip() or "1"
+            if not raw_url:
+                return
+            dlg.destroy()
+
+            def _bg_resolve():
+                self.log(f"🌐 [Teams/URL] Előkészítés és letöltés: {raw_url}")
+                local_path = CloudVideoResolver.resolve_to_local_path(raw_url, log_cb=self.log)
+                def _add_ui():
+                    fname = os.path.basename(local_path.split("?")[0]) or "Remote_Stream.mp4"
+                    uid = f"vid_{len(self.video_data)}_{abs(hash(local_path)) % 100000}"
+                    self.video_data.append({"uid": uid, "path": local_path, "name": fname, "id": subj_id})
+                    self.tree.insert("", "end", iid=uid, values=(fname, subj_id, self.tr("status_waiting"), local_path))
+                    self._refresh_kpi_cards()
+                self.root.after(0, _add_ui)
+
+            threading.Thread(target=_bg_resolve, daemon=True).start()
+
+        url_entry.bind("<Return>", _submit_url)
+        btn_bar = tk.Frame(box, bg=P["bg_card"])
+        btn_bar.pack(fill="x", pady=(6, 0))
+        ttk.Button(btn_bar, text="📁 Helyi Teams / OneDrive mappa", command=_open_local_teams_folder, style="Teal.TButton").pack(side="left")
+        ttk.Button(btn_bar, text="Mégse", command=dlg.destroy, style="Ghost.TButton").pack(side="right", padx=(6, 0))
+        ttk.Button(btn_bar, text="＋ URL Hozzáadása (Enter)", command=_submit_url, style="Emerald.TButton").pack(side="right")
+
+    def _append_video_list(self, files):
+        existing_paths = {item["path"] for item in self.video_data}
+        for fpath in files:
+            if fpath in existing_paths:
+                continue
+            fname = os.path.basename(fpath)
+            digits = "".join(filter(str.isdigit, os.path.splitext(fname)[0]))
+            suggested_id = digits[-3:] if digits else str(len(self.video_data) + 1)
+            uid = f"vid_{len(self.video_data)}_{abs(hash(fpath)) % 100000}"
+            self.video_data.append({"uid": uid, "path": fpath, "name": fname, "id": suggested_id})
+            self.tree.insert("", "end", iid=uid, values=(fname, suggested_id, self.tr("status_waiting"), fpath))
+        self._refresh_kpi_cards()
 
     def remove_selected_video(self):
         if self.is_running:
@@ -4987,7 +5536,11 @@ class PerVideoIDTrackerApp:
         )
 
         if best_contour is None:
-            ai_pose = getattr(self.hybrid_locator, "last_sync_pose", None)
+            ai_pose = None
+            if stream_id is not None:
+                ai_pose = self.hybrid_locator.get_latest_pose_for_bbox(0, 0, rw, rh, rw, rh, stream_id=stream_id)
+            if ai_pose is None:
+                ai_pose = getattr(self.hybrid_locator._tls, "last_pose", None) or getattr(self.hybrid_locator, "last_sync_pose", None)
             if use_yolo and getattr(self.hybrid_locator, "is_rodent_pose", False) and ai_pose and "bbox" in ai_pose:
                 ai_mask = self.hybrid_locator._build_capsule_mask_from_pose(ai_pose, ai_pose["bbox"], rw, rh)
                 ai_cnts, _ = cv2.findContours(ai_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -5167,13 +5720,36 @@ class PerVideoIDTrackerApp:
         left_tail_ext = int(t_x0)
         right_tail_ext = int(upper_mask.shape[1] - t_x1)
 
-        # In standard Left-to-Right protocol, orientation is fixed:
-        # Snout (head) is ALWAYS at the right (+X, leading anterior edge)
-        # Rump (tail base) is ALWAYS at the left (-X, trailing posterior edge)
-        move_dir = 1.0
-        rump_x = float(torso_left_x)
-        snout_x = float(torso_right_x - 1)
-        span_x = max(18.0, snout_x - rump_x)
+        # --- VALÓDI IRÁNYZÁR (chk_lock_lr) ÉS KÉTIRÁNYÚ ORIENTÁCIÓ ---
+        try:
+            if threading.current_thread() is threading.main_thread():
+                lock_lr_active = bool(self.var_lock_lr_direction.get()) and not bool(self.var_bidirectional.get())
+            else:
+                lock_lr_active = bool((getattr(self, "_run_flags", {}) or {}).get("lock_lr_active", False))
+        except Exception:
+            lock_lr_active = False
+
+        if lock_lr_active:
+            move_dir = 1.0
+        else:
+            # Ha nincs rögzítve a Bal->Jobb tengely, és a faroknyúlvány egyértelműen a jobb oldalon van:
+            if move_dir == 0.0:
+                move_dir = -1.0 if (right_tail_ext > left_tail_ext + 14) else 1.0
+            else:
+                move_dir = 1.0 if float(move_dir) >= 0.0 else -1.0
+
+        # Ha Bal -> Jobb (+1.0): Faroktő (rump) balra, Orr (snout) jobbra
+        # Ha Jobb -> Bal (-1.0): Faroktő (rump) jobbra, Orr (snout) balra
+        if move_dir >= 0.0:
+            rump_x = float(torso_left_x)
+            snout_x = float(torso_right_x - 1)
+        else:
+            rump_x = float(torso_right_x - 1)
+            snout_x = float(torso_left_x)
+
+        span_vector = snout_x - rump_x  # Előjeles vektor a faroktőtől az orrig!
+        if abs(span_vector) < 18.0:
+            span_vector = 18.0 if move_dir >= 0.0 else -18.0
 
         torso_crop = upper_mask[:, t_x0:t_x1]
         dist_crop = cv2.distanceTransform((torso_crop > 0).astype(np.uint8), cv2.DIST_L2, 3)
@@ -5190,7 +5766,8 @@ class PerVideoIDTrackerApp:
             fallback_y = torso_cy
 
         def sample_anatomical_joint(rel_norm, dorsal_bias=0.0, window_frac=0.06):
-            gx = int(round(rump_x + rel_norm * span_x))
+            # rel_norm = 0.0 (Faroktő) ---> rel_norm = 1.0 (Orrhegy), mindkét irányban helyes!
+            gx = int(round(rump_x + rel_norm * span_vector))
             lx = int(np.clip(gx - torso_left_x, 0, max(0, torso_crop.shape[1] - 1)))
             half_w = max(2, int(round(torso_width * window_frac)))
             c0 = max(0, lx - half_w)
@@ -5217,8 +5794,8 @@ class PerVideoIDTrackerApp:
         head_pt = sample_anatomical_joint(0.85, dorsal_bias=0.16)
         nose_pt = sample_anatomical_joint(0.98, dorsal_bias=-0.22, window_frac=0.035)
 
-        ant_x_a = int(round(rump_x + 0.78 * span_x))
-        ant_x_b = int(round(rump_x + 1.00 * span_x))
+        ant_x_a = int(round(rump_x + 0.78 * span_vector))
+        ant_x_b = int(round(rump_x + 1.00 * span_vector))
         ax1, ax2 = max(0, min(ant_x_a, ant_x_b)), min(mw, max(ant_x_a, ant_x_b) + 1)
         snout_pitched_down = False
         if ax2 > ax1 and head_pt[1] < mh:
@@ -5287,8 +5864,8 @@ class PerVideoIDTrackerApp:
                         tail_chain = pts_t + [tail_base]
 
         def sample_ventral_paw(rel_start, rel_end, parent_joint):
-            x_a = int(round(rump_x + rel_start * span_x))
-            x_b = int(round(rump_x + rel_end * span_x))
+            x_a = int(round(rump_x + rel_start * span_vector))
+            x_b = int(round(rump_x + rel_end * span_vector))
             px1 = max(0, min(x_a, x_b))
             px2 = min(mw, max(x_a, x_b) + 1)
             py1 = max(0, parent_joint[1])
@@ -5650,7 +6227,10 @@ class PerVideoIDTrackerApp:
             aspect = max(float(sw), top_w) / max(1.0, float(sh))
 
             # In Left-to-Right locomotion, anterior (head/forelimb) is strictly towards right (+X)
-            rel_pos_norm = float(np.clip((dip_x_local - t_left) / max(1.0, float(t_width)), 0.0, 1.0))
+            if eff_dir >= 0:
+                rel_pos_norm = float(np.clip((dip_x_local - t_left) / max(1.0, float(t_width)), 0.0, 1.0))
+            else:
+                rel_pos_norm = float(np.clip(((t_left + t_width) - dip_x_local) / max(1.0, float(t_width)), 0.0, 1.0))
 
             nose_is_dipping_here = False
             if anatomy is not None and "nose_pt" in anatomy:
@@ -5658,11 +6238,12 @@ class PerVideoIDTrackerApp:
                 if abs(nx - dip_x_local) <= 18 and ny >= int(fault_curve[np.clip(nx, 0, mw - 1)]) - 1:
                     nose_is_dipping_here = True
 
-            if nose_is_dipping_here and rel_pos_norm >= 0.82:
+            if nose_is_dipping_here and rel_pos_norm >= 0.80:
                 part_label, part_code = "ORR (Exploráció)", "NOSE"
             else:
-                part_label, part_code = DLCAddonManager.classify_dip_features(
-                    rel_pos_norm, aspect, float(depth_val), skin_score, head_pitch
+                part_label, part_code = DLCAddonManager.classify_dip_with_anatomy(
+                    dip_x_local, dip_y_local, anatomy, rel_pos_norm, aspect, float(depth_val),
+                    skin_score=skin_score, head_pitch_down=head_pitch, move_dir=eff_dir
                 )
 
             type_bonus = 60.0 if part_code == "PAW" else (10.0 if part_code == "NOSE" else 0.0)
@@ -5748,7 +6329,9 @@ class PerVideoIDTrackerApp:
                 cv2.circle(acc, (dx, dy), 26, 3.5, -1)
 
         if np.max(acc) > 0:
-            if self.gpu_available and self.var_use_gpu.get():
+            # Háttérszálból (export) hívódik: Tk változó helyett a pillanatképet használjuk
+            use_gpu_hm = bool((getattr(self, "_run_flags", {}) or {}).get("use_gpu", False))
+            if self.gpu_available and use_gpu_hm:
                 try:
                     u_acc = cv2.UMat(acc)
                     u_blur = cv2.GaussianBlur(u_acc, (51, 51), 0)
@@ -6130,6 +6713,15 @@ class PerVideoIDTrackerApp:
         except ValueError:
             max_workers = 4
 
+        # Szálbiztos pillanatkép a Tk változókról (háttérszálak nem olvashatnak közvetlenül Tk változót)
+        self._run_flags = {
+            "use_gpu": bool(self.var_use_gpu.get()),
+            "dlc_superanimal": bool(self.var_dlc_superanimal.get()),
+            "dlc_export_train": bool(self.var_dlc_export_train.get()),
+            "enable_review": bool(self.var_enable_review.get()),
+            "lock_lr_active": bool(self.var_lock_lr_direction.get()) and not bool(self.var_bidirectional.get()),
+        }
+
         threading.Thread(
             target=self.execute_parallel_processing,
             args=(list(self.video_data), roi_data, max_workers),
@@ -6185,7 +6777,7 @@ class PerVideoIDTrackerApp:
         gpu_tag = f"⚡ GPU: {self.gpu_device_name} (Active)" if gpu_active else "GPU: Inactive (CPU Mode)"
         self.log(
             f"\n🚀 [Workstation Engine Started] Videos: {total_videos} | Workers: {max_workers} | "
-            f"Stride: {frame_stride} | Protocol Target: {target_runs} Runs (L->R) | "
+            f"Stride: {frame_stride} | Protocol Target: {target_runs} Runs ({'L<->R' if (bidirectional and not lock_lr) else 'L->R'}) | "
             f"Scale: {px_per_cm:.2f} px/cm | {gpu_tag}"
         )
 
@@ -6256,6 +6848,8 @@ class PerVideoIDTrackerApp:
             stride_pad = 35 * (frame_stride - 1)
             left_gate_min_loc = max(0, (left_gate_x - 130) - v_rx)
             left_gate_max_loc = min(v_rw, (left_gate_x + 220 + stride_pad) - v_rx)
+            right_gate_min_loc = max(0, (right_gate_x - 220 - stride_pad) - v_rx)
+            right_gate_max_loc = min(v_rw, (right_gate_x + 130) - v_rx)
 
             master_roi_canvas = np.full((v_rh, v_rw, 3), 255, dtype=np.uint8)
             current_run_roi = np.full((v_rh, v_rw, 3), 255, dtype=np.uint8)
@@ -6310,7 +6904,7 @@ class PerVideoIDTrackerApp:
                     current_sec = frame_idx / fps
                     dt = frame_stride / fps
 
-                    # Gate pre-check: quick spatial check when waiting for a run to enter Left Gate
+                    # 1. Kapu elő-ellenőrzés (Bal kapu VAGY Kétirányú módban Jobb kapu is)
                     if state.startswith("WAIT_FOR_RUN_"):
                         if elastic_tracker is not None and (frame_idx % 8 == 0):
                             crop_gray_pre = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
@@ -6321,7 +6915,12 @@ class PerVideoIDTrackerApp:
                         left_has_motion = self._quick_check_start_gate(
                             crop, ref_bg_gate, ref_inv_gate, left_gate_min_loc, left_gate_max_loc, dark_t, diff_t
                         )
-                        if not left_has_motion:
+                        right_has_motion = False
+                        if bidirectional and not lock_lr:
+                            right_has_motion = self._quick_check_start_gate(
+                                crop, ref_bg_gate, ref_inv_gate, right_gate_min_loc, right_gate_max_loc, dark_t, diff_t
+                            )
+                        if not (left_has_motion or right_has_motion):
                             continue
 
                     # Elastic rung tracking update
@@ -6397,18 +6996,23 @@ class PerVideoIDTrackerApp:
                         session_trajectory.append((mouse_x_global, mouse_y_center_global, current_sec))
 
                     # ──────────────────────────────────────────────────────────
-                    # 3-RUN PROTOCOL LIFECYCLE (LEFT -> RIGHT ONLY)
+                    # RUN LIFECYCLE (SUPPORTS BOTH L->R AND BIDIRECTIONAL R->L)
                     # ──────────────────────────────────────────────────────────
                     if state.startswith("WAIT_FOR_RUN_"):
                         target_run_num = int(state.split("_")[-1])
-                        # Entry condition: Genuine rodent mass at Left Gate & at least 1.5s since last run
-                        if (current_sec - last_run_end_sec >= 1.5) and mouse_detected and mouse_x_global is not None:
-                            if mask_area >= 2000 and (left_gate_x - 120 <= mouse_x_global <= left_gate_x + 220 + stride_pad):
+                        if (current_sec - last_run_end_sec >= 1.5) and mouse_detected and mouse_x_global is not None and mask_area >= 2000:
+                            at_left_start = (left_gate_x - 120 <= mouse_x_global <= left_gate_x + 220 + stride_pad)
+                            at_right_start = (
+                                bidirectional and not lock_lr
+                                and (right_gate_x - 220 - stride_pad <= mouse_x_global <= right_gate_x + 120)
+                            )
+                            if at_left_start or at_right_start:
                                 run_count = target_run_num
-                                run_direction = 1.0  # Anchored Left to Right
+                                run_direction = 1.0 if at_left_start else -1.0
+                                dir_tag = "L->R" if run_direction > 0 else "R->L"
                                 if kalman is not None:
                                     kalman.reset(mouse_x_global, mouse_y_center_global)
-                                set_state(f"RUNNING_{run_count}", current_sec, f"Run #{run_count} (L->R) started...")
+                                set_state(f"RUNNING_{run_count}", current_sec, f"Run #{run_count} ({dir_tag}) started...")
                                 start_time = current_sec
                                 last_seen_time = current_sec
                                 current_run_roi.fill(255)
@@ -6450,11 +7054,11 @@ class PerVideoIDTrackerApp:
                                 max(int(v_rw * 0.030), (left_gate_x - 100) - v_rx),
                                 min(int(v_rw * 0.970), (right_gate_x + 100) - v_rx),
                             )
-                            # Strict Left-to-Right heading (move_dir=1.0)
+                            # Átadjuk a tényleges run_direction-t (+1.0 vagy -1.0)
                             is_dip, dip_x_loc, dip_y_loc, dip_aspect, dip_depth, dip_meta = self._check_real_dip_below_line(
                                 final_mouse_mask, active_fault_target, crop=crop, bbox=bbox,
                                 previous_bbox=previous_bbox_local, inv_ladder_mask=active_inv_ladder,
-                                move_dir=1.0, return_meta=True, skin_map=skin_idx_map,
+                                move_dir=run_direction, return_meta=True, skin_map=skin_idx_map,
                                 valid_x_bounds=valid_ladder_bounds, base_gray=active_base_gray
                             )
 
@@ -6490,7 +7094,7 @@ class PerVideoIDTrackerApp:
                                     "rel_pos_norm": dip_meta.get("rel_pos_norm", 0.5),
                                     "paw_skin_score": dip_meta.get("paw_skin_score", 0.0),
                                     "head_pitch_down": dip_meta.get("head_pitch_down", False),
-                                    "move_dir": 1.0,
+                                    "move_dir": run_direction,
                                     "anatomy": dip_meta.get("anatomy"),
                                     "roi_offset": (v_rx, v_ry),
                                     "frame_buf": None,
@@ -6555,9 +7159,13 @@ class PerVideoIDTrackerApp:
                                     in_freeze_event = False
                             prev_mouse_x = mouse_x_global
 
-                            # Check goal arrival at Right Gate
-                            mouse_front_edge_x = v_rx + bbox[0] + bbox[2]
-                            reached_goal = (mouse_x_global >= right_gate_x - 45) or (mouse_front_edge_x >= right_gate_x + 10)
+                            # Célba érés ellenőrzése iránytól függően:
+                            if run_direction >= 0:
+                                mouse_front_edge_x = v_rx + bbox[0] + bbox[2]
+                                reached_goal = (mouse_x_global >= right_gate_x - 45) or (mouse_front_edge_x >= right_gate_x + 10)
+                            else:
+                                mouse_front_edge_x = v_rx + bbox[0]
+                                reached_goal = (mouse_x_global <= left_gate_x + 45) or (mouse_front_edge_x <= left_gate_x - 10)
 
                             if reached_goal:
                                 if in_freeze_event:
@@ -6568,60 +7176,74 @@ class PerVideoIDTrackerApp:
                                     ))
                                     in_freeze_event = False
                                     current_still_sec = 0.0
-                                elif 0.08 <= current_still_sec < 0.30:
-                                    micro_hesitation_events.append((
-                                        current_freeze_start_sec, current_sec, current_still_sec,
-                                        current_freeze_x, current_freeze_y_top
-                                    ))
-                                    current_still_sec = 0.0
-
                                 end_time = current_sec
                                 transit_time = end_time - start_time
 
                                 if transit_time > 0.4:
                                     np.minimum(master_roi_canvas, current_run_roi, out=master_roi_canvas)
 
+                                    # --- GAUSS-SIMÍTOTT TRAJEKTÓRIA A KINEMATIKÁHOZ ÉS JERK-HÖZ ---
+                                    n_pts = len(trajectory)
+                                    raw_xs = np.array([pt[0] for pt in trajectory], dtype=np.float64)
+                                    raw_ys = np.array([pt[1] for pt in trajectory], dtype=np.float64)
+                                    raw_ts = np.array([pt[2] for pt in trajectory], dtype=np.float64)
+
+                                    if n_pts >= 5:
+                                        g_kernel = np.array([0.06, 0.24, 0.40, 0.24, 0.06], dtype=np.float64)
+                                        sm_xs = np.convolve(np.pad(raw_xs, (2, 2), mode="edge"), g_kernel, mode="valid")
+                                        sm_ys = np.convolve(np.pad(raw_ys, (2, 2), mode="edge"), g_kernel, mode="valid")
+                                    else:
+                                        sm_xs, sm_ys = raw_xs, raw_ys
+
                                     path_len_px = 0.0
                                     max_speed_px_s = 0.0
                                     step_speeds_cm_s = []
                                     step_dts = []
-                                    for i in range(1, len(trajectory)):
-                                        x0, y0, t0 = trajectory[i - 1]
-                                        x1, y1, t1 = trajectory[i]
-                                        step_d = float(np.hypot(x1 - x0, y1 - y0))
-                                        step_t = t1 - t0
+
+                                    for i in range(1, n_pts):
+                                        step_d = float(np.hypot(sm_xs[i] - sm_xs[i - 1], sm_ys[i] - sm_ys[i - 1]))
+                                        step_t = float(raw_ts[i] - raw_ts[i - 1])
                                         path_len_px += step_d
                                         if step_t > 0.001:
                                             spd = step_d / step_t
                                             if spd > max_speed_px_s:
                                                 max_speed_px_s = spd
-                                            step_speeds_cm_s.append((spd / max(0.01, px_per_cm)))
+                                            step_speeds_cm_s.append(spd / max(0.01, px_per_cm))
                                             step_dts.append(step_t)
+
+                                    # A sebességgörbén még egy 3-pontos simítást végzünk a 2. és 3. derivált (Jerk) előtt
+                                    if len(step_speeds_cm_s) >= 5:
+                                        vel_arr = np.convolve(
+                                            np.pad(step_speeds_cm_s, (1, 1), mode="edge"),
+                                            np.array([0.25, 0.50, 0.25]), mode="valid"
+                                        )
+                                    else:
+                                        vel_arr = np.array(step_speeds_cm_s, dtype=np.float64)
 
                                     avg_speed_px_s = (path_len_px / transit_time) if transit_time > 0 else 0.0
                                     path_len_cm = path_len_px / max(0.01, px_per_cm)
                                     avg_speed_cm_s = avg_speed_px_s / max(0.01, px_per_cm)
                                     max_speed_cm_s = max_speed_px_s / max(0.01, px_per_cm)
 
-                                    if len(step_speeds_cm_s) >= 4:
-                                        vel_mean = float(np.mean(step_speeds_cm_s))
-                                        vel_std = float(np.std(step_speeds_cm_s))
+                                    if len(vel_arr) >= 4:
+                                        vel_mean = float(np.mean(vel_arr))
+                                        vel_std = float(np.std(vel_arr))
                                         vel_cv = float(vel_std / max(1e-4, vel_mean))
                                     else:
                                         vel_cv = 0.0
 
-                                    if len(step_speeds_cm_s) >= 6:
+                                    if len(vel_arr) >= 6:
                                         accels = []
-                                        for k in range(1, len(step_speeds_cm_s)):
+                                        for k in range(1, len(vel_arr)):
                                             dt_a = step_dts[k]
                                             if dt_a > 1e-4:
-                                                accels.append((step_speeds_cm_s[k] - step_speeds_cm_s[k - 1]) / dt_a)
+                                                accels.append((vel_arr[k] - vel_arr[k - 1]) / dt_a)
                                         jerks = []
                                         for k in range(1, len(accels)):
                                             dt_j = step_dts[k]
                                             if dt_j > 1e-4:
                                                 jerks.append(abs(accels[k] - accels[k - 1]) / dt_j)
-                                        ref_jerk = max(100.0, float(np.mean(step_speeds_cm_s) * 80.0))
+                                        ref_jerk = max(100.0, float(np.mean(vel_arr) * 80.0))
                                         mean_jerk = float(np.median(jerks)) if jerks else 0.0
                                         jerk_score = float(np.clip((mean_jerk / ref_jerk) * 35.0, 0.0, 100.0))
                                     else:
@@ -6642,7 +7264,7 @@ class PerVideoIDTrackerApp:
 
                                     video_runs_list.append({
                                         "run_num": run_count,
-                                        "direction": "FORWARD",
+                                        "direction": "FORWARD" if run_direction >= 0 else "REVERSE",
                                         "start_time": start_time,
                                         "end_time": end_time,
                                         "transit_time": transit_time,
@@ -6666,7 +7288,7 @@ class PerVideoIDTrackerApp:
                                     paw_cnt_live = sum(1 for d_ev in dip_events if d_ev.get("dlc_code") == "PAW")
                                     nose_cnt_live = sum(1 for d_ev in dip_events if d_ev.get("dlc_code") == "NOSE")
                                     self.log(
-                                        f"   ✔ [#{animal_id}] Run #{run_count} (L->R) DONE: "
+                                        f"   ✔ [#{animal_id}] Run #{run_count} ({'L->R' if run_direction >= 0 else 'R->L'}) DONE: "
                                         f"Time={transit_time:.2f}s | PawFaults={paw_cnt_live} | Explorations={nose_cnt_live} | "
                                         f"Speed={avg_speed_cm_s:.1f} cm/s"
                                     )
@@ -6677,7 +7299,7 @@ class PerVideoIDTrackerApp:
                                     break
                                 else:
                                     next_target = run_count + 1
-                                    set_state(f"WAIT_FOR_RUN_{next_target}", current_sec, f"Run #{run_count} completed. Waiting for Run #{next_target} at Left Gate...")
+                                    set_state(f"WAIT_FOR_RUN_{next_target}", current_sec, f"Run #{run_count} completed. Waiting for Run #{next_target}{' (any gate)' if (bidirectional and not lock_lr) else ' at Left Gate'}...")
 
             finally:
                 reader.stop()
@@ -6708,17 +7330,18 @@ class PerVideoIDTrackerApp:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             list(executor.map(process_single_video, video_data))
 
+        run_flags = getattr(self, "_run_flags", {}) or {}
         if self.is_running and self.pending_results:
-            if self.var_dlc_superanimal.get():
+            if run_flags.get("dlc_superanimal", False):
                 self.dlc_addon.classify_dips_with_superanimal(self.pending_results)
-            if self.var_dlc_export_train.get():
+            if run_flags.get("dlc_export_train", False):
                 self.dlc_addon.export_training_dataset(
                     self.pending_results, os.path.join(self.output_base_dir, "DLC_Tanitokepek_Export")
                 )
 
         total_dips_found = sum(len(r["dips"]) for res in self.pending_results for r in res["runs"])
         try:
-            if self.is_running and self.var_enable_review.get() and total_dips_found > 0:
+            if self.is_running and run_flags.get("enable_review", True) and total_dips_found > 0:
                 self.root.after(0, self.open_review_window)
             else:
                 self.root.after(0, self.finalize_and_export_all)
@@ -7037,6 +7660,97 @@ class PerVideoIDTrackerApp:
             render_preview(iid)
             return "break"
 
+        def set_part_forepaw(event=None):
+            iid = current_iid[0]
+            if not iid:
+                return "break"
+            _, _, d = dip_lookup[iid]
+            d["dlc_code"] = "PAW"
+            d["dlc_part"] = "MELLSŐ LÁB (Lábhiba)"
+            d["valid"] = True
+            update_tree_row(iid)
+            render_preview(iid)
+            return "break"
+
+        def set_part_hindpaw(event=None):
+            iid = current_iid[0]
+            if not iid:
+                return "break"
+            _, _, d = dip_lookup[iid]
+            d["dlc_code"] = "PAW"
+            d["dlc_part"] = "HÁTSÓ LÁB (Lábhiba)"
+            d["valid"] = True
+            update_tree_row(iid)
+            render_preview(iid)
+            return "break"
+
+        def set_part_nose(event=None):
+            iid = current_iid[0]
+            if not iid:
+                return "break"
+            _, _, d = dip_lookup[iid]
+            d["dlc_code"] = "NOSE"
+            d["dlc_part"] = "ORR (Exploráció)"
+            d["valid"] = True
+            update_tree_row(iid)
+            render_preview(iid)
+            return "break"
+
+        def set_part_tail(event=None):
+            iid = current_iid[0]
+            if not iid:
+                return "break"
+            _, _, d = dip_lookup[iid]
+            d["dlc_code"] = "HIND_TAIL"
+            d["dlc_part"] = "FAROK (Billenés)"
+            d["valid"] = True
+            update_tree_row(iid)
+            render_preview(iid)
+            return "break"
+
+        def on_canvas_shift_click(event):
+            iid = current_iid[0]
+            if not iid or iid not in dip_lookup:
+                return
+            res, r, d = dip_lookup[iid]
+            raw_frame = decode_frame_compressed(d["frame_buf"])
+            if raw_frame is None:
+                return
+            fh, fw = raw_frame.shape[:2]
+
+            cw = max(480, canvas_view.winfo_width())
+            ch = max(320, canvas_view.winfo_height())
+            z = view_state["zoom"]
+            if z > 1.01:
+                vw = max(40.0, fw / z)
+                vh = max(30.0, fh / z)
+                cx_px = view_state["cx"] * fw
+                cy_px = view_state["cy"] * fh
+                x1 = int(np.clip(cx_px - vw / 2.0, 0, max(0, fw - vw)))
+                y1 = int(np.clip(cy_px - vh / 2.0, 0, max(0, fh - vh)))
+                disp_w, disp_h = int(vw), int(vh)
+            else:
+                x1, y1 = 0, 0
+                disp_w, disp_h = fw, fh
+
+            scale = min(cw / float(disp_w), ch / float(disp_h))
+            tw = max(10, int(disp_w * scale))
+            th = max(10, int(disp_h * scale))
+            img_left = (cw - tw) / 2.0
+            img_top = (ch - th) / 2.0
+
+            rx = event.x - img_left
+            ry = event.y - img_top
+            if 0 <= rx < tw and 0 <= ry < th:
+                orig_x = int(np.clip(x1 + rx / scale, 0, fw - 1))
+                orig_y = int(np.clip(y1 + ry / scale, 0, fh - 1))
+                d["x"] = orig_x
+                d["y"] = orig_y
+                d["manual_relocated"] = True
+                d["valid"] = True
+                update_tree_row(iid)
+                render_preview(iid)
+
         def hotkey_toggle_save(event=None):
             iid = current_iid[0]
             if not iid:
@@ -7080,6 +7794,37 @@ class PerVideoIDTrackerApp:
         btn_r_crop.pack(side="left")
         ToolTip(btn_r_crop, lambda: self.tr("tt_rev_crop"))
 
+        direct_part_row = tk.Frame(ctrl_box, bg=P["bg_panel"], pady=3, padx=6)
+        direct_part_row.pack(fill="x", pady=(2, 0))
+
+        tk.Label(
+            direct_part_row, text="Testrész javítás [1-kattintás]:",
+            bg=P["bg_panel"], fg=P["text_muted"], font=(self.ui_font, 8, "bold")
+        ).pack(side="left", padx=(0, 6))
+
+        btn_dp_fore = ttk.Button(direct_part_row, text="🐾 Mellső (1/M)", command=set_part_forepaw, style="Ghost.TButton")
+        btn_dp_fore.pack(side="left", padx=(0, 4))
+        ToolTip(btn_dp_fore, lambda: "Mellső mancs hiba azonnali beállítása [1 vagy M]")
+
+        btn_dp_hind = ttk.Button(direct_part_row, text="🐾 Hátsó (2/H)", command=set_part_hindpaw, style="Ghost.TButton")
+        btn_dp_hind.pack(side="left", padx=(0, 4))
+        ToolTip(btn_dp_hind, lambda: "Hátsó mancs hiba azonnali beállítása [2 vagy H]")
+
+        btn_dp_nose = ttk.Button(direct_part_row, text="🔴 Orr (3/O)", command=set_part_nose, style="Ghost.TButton")
+        btn_dp_nose.pack(side="left", padx=(0, 4))
+        ToolTip(btn_dp_nose, lambda: "Orr exploráció azonnali beállítása [3 vagy O]")
+
+        btn_dp_tail = ttk.Button(direct_part_row, text="🔵 Farok (4/F)", command=set_part_tail, style="Ghost.TButton")
+        btn_dp_tail.pack(side="left", padx=(0, 4))
+        ToolTip(btn_dp_tail, lambda: "Farok billenés azonnali beállítása [4 vagy F]")
+
+        tk.Label(
+            direct_part_row, text="💡 Shift+Kattintás a képen: Pont áthelyezése a mancsra",
+            bg=P["bg_panel"], fg=P["cyan"], font=(self.ui_font, 8)
+        ).pack(side="right", padx=4)
+
+        canvas_view.bind("<Shift-Button-1>", on_canvas_shift_click)
+
         dip_tree.bind("<<TreeviewSelect>>", on_select)
         if ordered_iids:
             dip_tree.selection_set(ordered_iids[0])
@@ -7088,6 +7833,22 @@ class PerVideoIDTrackerApp:
 
         bottom_bar = tk.Frame(rev_win, bg=P["bg_main"], padx=16, pady=8)
         bottom_bar.pack(fill="x")
+
+        def save_to_training_db():
+            target_dir = os.path.join(self.output_base_dir, "DLC_Tanitokepek_Export")
+            n_exp = self.dlc_addon.export_training_dataset(self.pending_results, target_dir)
+            messagebox.showinfo(
+                APP_NAME,
+                f"✅ {n_exp} db felülvizsgált és jóváhagyott hiba-képkocka sikeresen mentve a tanítóadatbázisba!\n\nKönyvtár:\n{target_dir}",
+                parent=rev_win
+            )
+
+        btn_r_train = ttk.Button(
+            bottom_bar, text="🧠 Mentés Tanítóadatbázisba",
+            command=save_to_training_db, style="Teal.TButton"
+        )
+        btn_r_train.pack(side="left")
+        ToolTip(btn_r_train, lambda: "A felülvizsgált, pontosított hibaképek exportálása a tanítóadatbázisba (Active Learning)")
 
         def confirm_and_close(event=None):
             try:
@@ -7109,6 +7870,14 @@ class PerVideoIDTrackerApp:
             rev_win.bind(k, hotkey_toggle_valid)
         for k in ("<t>", "<T>"):
             rev_win.bind(k, hotkey_cycle_part)
+        for k in ("1", "<m>", "<M>"):
+            rev_win.bind(k, set_part_forepaw)
+        for k in ("2", "<h>", "<H>"):
+            rev_win.bind(k, set_part_hindpaw)
+        for k in ("3", "<o>", "<O>"):
+            rev_win.bind(k, set_part_nose)
+        for k in ("4", "<f>", "<F>"):
+            rev_win.bind(k, set_part_tail)
         for k in ("<s>", "<S>"):
             rev_win.bind(k, hotkey_toggle_save)
         for k in ("<z>", "<Z>"):
@@ -7465,6 +8234,9 @@ class PerVideoIDTrackerApp:
 
 
 def main():
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     configure_native_os_identity()
     root = tk.Tk()
     app = PerVideoIDTrackerApp(root)
