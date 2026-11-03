@@ -2,6 +2,8 @@ name: Build MouseAnalyzer PRO (.exe & .dmg)
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -25,11 +27,14 @@ jobs:
           python-version: '3.11'
 
       - name: Install Dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install opencv-python numpy pyinstaller
+          pip install opencv-python numpy numba pandas yt-dlp pyinstaller
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install ultralytics
 
-      - name: Verify Icons Exist
+      - name: Verify Required Assets Exist
         shell: pwsh
         run: |
           if (-not (Test-Path "icon.ico")) {
@@ -44,6 +49,17 @@ jobs:
             --name "MouseAnalyzer_PRO" `
             --icon "icon.ico" `
             --add-data "icon.ico;." `
+            --add-data "icon.icns;." `
+            --add-data "eger_kalibracio_profil.json;." `
+            --add-data "mouse_pose_ai.pt;." `
+            --add-data "rodent_detector.pt;." `
+            --add-data "yolov8n-pose.pt;." `
+            --add-data "yolov8n.pt;." `
+            --collect-all cv2 `
+            --collect-all ultralytics `
+            --collect-all numba `
+            --hidden-import numpy `
+            --hidden-import pandas `
             MouseTracker.py
 
       - name: Upload Windows Artifact
@@ -69,7 +85,7 @@ jobs:
       - name: Install Dependencies & PyObjC
         run: |
           python -m pip install --upgrade pip
-          pip install opencv-python numpy pyinstaller pyobjc-core pyobjc-framework-Cocoa
+          pip install opencv-python numpy numba pandas yt-dlp ultralytics pyinstaller pyobjc-core pyobjc-framework-Cocoa
 
       - name: Verify macOS Icons Exist
         run: |
@@ -86,8 +102,16 @@ jobs:
             --osx-bundle-identifier "com.zalma.mouseanalyzer.pro" \
             --add-data "icon.icns:." \
             --add-data "icon.ico:." \
+            --add-data "eger_kalibracio_profil.json:." \
+            --add-data "mouse_pose_ai.pt:." \
+            --add-data "rodent_detector.pt:." \
+            --add-data "yolov8n-pose.pt:." \
+            --add-data "yolov8n.pt:." \
             --collect-all cv2 \
+            --collect-all ultralytics \
+            --collect-all numba \
             --hidden-import numpy \
+            --hidden-import pandas \
             MouseTracker.py
 
       - name: Ad-Hoc Code Sign .app
@@ -111,7 +135,7 @@ jobs:
           path: dist/MouseAnalyzer_PRO_macOS.dmg
 
   # ============================================================================
-  # 3. AUTOMATIKUS GITHUB RELEASE LÉTREHOZÁSA
+  # 3. AUTOMATIKUS GITHUB RELEASE LÉTREHOZÁSA (ha v* tag-et pusholtál)
   # ============================================================================
   create-release:
     needs: [build-windows, build-macos]
