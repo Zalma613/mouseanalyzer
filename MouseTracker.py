@@ -4098,12 +4098,13 @@ class PerVideoIDTrackerApp:
         slider_samples = ttk.Scale(left_panel, from_=1.0, to=1.0, variable=slider_var, orient="horizontal")
         slider_samples.pack(fill="x")
 
-        # Right Column: Training Dashboard
+        # Right Column: Training Dashboard (Fixed width to prevent layout jitter)
         right_outer, right_panel, _, _ = self._create_section_card(
             body, self.tr("preview_trainer_title"), P["emerald"], self.tr("badge_trainer")
         )
         right_outer.pack(side="left", fill="y", padx=0)
-        right_outer.config(width=340)
+        right_outer.config(width=350)
+        right_outer.pack_propagate(False)
 
         # Telemetry Card
         t_card = tk.LabelFrame(
@@ -4167,7 +4168,7 @@ class PerVideoIDTrackerApp:
 
         lbl_prog_status = tk.Label(
             exec_card, text=self.tr("status_waiting_samples"), bg=P["bg_card"], fg=P["text_muted"],
-            font=(self.ui_font, 8), anchor="w"
+            font=(self.ui_font, 8), anchor="w", wraplength=310, justify="left"
         )
         lbl_prog_status.pack(fill="x", pady=(0, 4))
 
