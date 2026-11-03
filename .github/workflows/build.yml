@@ -57,6 +57,7 @@ jobs:
             --add-data "yolov8n.pt;." `
             --collect-all cv2 `
             --collect-all ultralytics `
+            --collect-all torchvision `
             --collect-all numba `
             --hidden-import numpy `
             --hidden-import pandas `
@@ -109,6 +110,7 @@ jobs:
             --add-data "yolov8n.pt:." \
             --collect-all cv2 \
             --collect-all ultralytics \
+            --collect-all torchvision \
             --collect-all numba \
             --hidden-import numpy \
             --hidden-import pandas \

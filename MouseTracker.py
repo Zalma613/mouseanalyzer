@@ -43,6 +43,80 @@ APP_VERSION = "3.6"
 _TORCH_MODULE = None
 _TORCH_CHECKED = False
 
+
+def ensure_safe_torchvision_nms():
+    """
+    Guarantees torchvision.ops.nms never crashes training or validation with:
+    'RuntimeError: operator torchvision::nms does not exist'
+    in frozen PyInstaller executables (.exe/.app/.dmg) or environments where torchvision
+    C++ binaries are mismatched, missing, or lack GPU kernels.
+    Seamlessly falls back to pure PyTorch vectorized NMS matching torchvision behavior.
+    """
+    try:
+        import torchvision
+        import torchvision.ops
+    except Exception:
+        return
+
+    orig_nms = getattr(torchvision.ops, "nms", None)
+    if getattr(orig_nms, "_is_safe_wrapper", False):
+        return
+
+    def safe_nms(boxes, scores, iou_threshold: float):
+        if orig_nms is not None:
+            try:
+                return orig_nms(boxes, scores, iou_threshold)
+            except Exception as e:
+                logger.debug("Native torchvision::nms operator unavailable, falling back to pure PyTorch NMS: %s", e)
+
+        try:
+            from ultralytics.utils.nms import TorchNMS
+            return TorchNMS.nms(boxes, scores, float(iou_threshold))
+        except Exception:
+            pass
+
+        # Pure PyTorch vectorized NMS fallback matching torchvision behavior exactly
+        if boxes.numel() == 0:
+            import torch
+            return torch.empty((0,), dtype=torch.int64, device=boxes.device)
+
+        import torch
+        x1, y1, x2, y2 = boxes.unbind(1)
+        areas = (x2 - x1) * (y2 - y1)
+        order = scores.argsort(0, descending=True)
+        keep = torch.zeros(order.numel(), dtype=torch.int64, device=boxes.device)
+        keep_idx = 0
+        iou_thresh = float(iou_threshold)
+        while order.numel() > 0:
+            i = order[0]
+            keep[keep_idx] = i
+            keep_idx += 1
+            if order.numel() == 1:
+                break
+            rest = order[1:]
+            xx1 = torch.maximum(x1[i], x1[rest])
+            yy1 = torch.maximum(y1[i], y1[rest])
+            xx2 = torch.minimum(x2[i], x2[rest])
+            yy2 = torch.minimum(y2[i], y2[rest])
+            w = (xx2 - xx1).clamp_(min=0)
+            h = (yy2 - yy1).clamp_(min=0)
+            inter = w * h
+            if inter.sum() == 0:
+                order = rest
+                continue
+            iou = inter / (areas[i] + areas[rest] - inter)
+            order = rest[iou <= iou_thresh]
+        return keep[:keep_idx]
+
+    safe_nms._is_safe_wrapper = True
+    try:
+        torchvision.ops.nms = safe_nms
+        if hasattr(torchvision.ops, "boxes"):
+            torchvision.ops.boxes.nms = safe_nms
+    except Exception as e:
+        logger.debug("Failed to patch torchvision.ops.nms: %s", e)
+
+
 def _get_torch():
     global _TORCH_MODULE, _TORCH_CHECKED
     if not _TORCH_CHECKED:
@@ -50,6 +124,7 @@ def _get_torch():
         try:
             import torch
             _TORCH_MODULE = torch
+            ensure_safe_torchvision_nms()
         except (ImportError, AttributeError, OSError) as e:
             logger.debug("PyTorch unavailable on this system: %s", e)
             _TORCH_MODULE = None
@@ -2682,6 +2757,7 @@ class DLCAddonManager:
             return None
 
         torch = _get_torch()
+        ensure_safe_torchvision_nms()
         from ultralytics import YOLO
 
         train_device = get_optimal_compute_device()["device"]
@@ -2852,6 +2928,7 @@ class DLCAddonManager:
             return None
 
         torch = _get_torch()
+        ensure_safe_torchvision_nms()
         from ultralytics import YOLO
 
         train_device = get_optimal_compute_device()["device"]
