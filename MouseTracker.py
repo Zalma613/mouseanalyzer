@@ -6,15 +6,22 @@ import time
 import queue
 import shutil
 import ctypes
+import logging
 import tempfile
 import subprocess
 import threading
-import importlib.util
 from concurrent.futures import ThreadPoolExecutor
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, scrolledtext
 import cv2
 import numpy as np
+
+# Configure standard application logger
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger("MouseTracker")
 
 try:
     from numba import njit, prange
@@ -29,8 +36,24 @@ except ImportError:
         return decorator
 
 APP_NAME = "MouseAnalyzer PRO"
-APP_ID = "zalma.mouseanalyzer.pro.3.6"
+APP_ID = "com.zalma.mouseanalyzer.pro"
 APP_VERSION = "3.6"
+
+# Single cached torch reference to prevent repeated import probes across hot paths
+_TORCH_MODULE = None
+_TORCH_CHECKED = False
+
+def _get_torch():
+    global _TORCH_MODULE, _TORCH_CHECKED
+    if not _TORCH_CHECKED:
+        _TORCH_CHECKED = True
+        try:
+            import torch
+            _TORCH_MODULE = torch
+        except (ImportError, AttributeError, OSError) as e:
+            logger.debug("PyTorch unavailable on this system: %s", e)
+            _TORCH_MODULE = None
+    return _TORCH_MODULE
 
 # ==============================================================================
 # RESOURCE PATH & NATIVE OS BRANDING
@@ -54,8 +77,8 @@ def configure_native_os_identity():
     if sys.platform == "win32":
         try:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
-        except (AttributeError, OSError):
-            pass
+        except (AttributeError, OSError) as e:
+            logger.debug("Win32 AppUserModelID configuration failed: %s", e)
     elif sys.platform == "darwin":
         try:
             from Foundation import NSBundle
@@ -65,8 +88,8 @@ def configure_native_os_identity():
                 if info is not None:
                     info["CFBundleName"] = APP_NAME
                     info["CFBundleDisplayName"] = APP_NAME
-        except (ImportError, AttributeError, KeyError):
-            pass
+        except (ImportError, AttributeError, KeyError) as e:
+            logger.debug("macOS NSBundle branding configuration failed: %s", e)
 
 
 def apply_window_icon(root):
@@ -78,8 +101,8 @@ def apply_window_icon(root):
         try:
             root.iconbitmap(default=ico_path)
             return
-        except (tk.TclError, OSError):
-            pass
+        except (tk.TclError, OSError) as e:
+            logger.debug("Win32 iconbitmap set failed: %s", e)
     elif sys.platform == "darwin" and os.path.exists(icns_path):
         try:
             from AppKit import NSApplication, NSImage
@@ -87,8 +110,8 @@ def apply_window_icon(root):
             ns_img = NSImage.alloc().initWithContentsOfFile_(icns_path)
             if ns_img:
                 ns_app.setApplicationIconImage_(ns_img)
-        except (ImportError, AttributeError, OSError):
-            pass
+        except (ImportError, AttributeError, OSError) as e:
+            logger.debug("macOS NSApplication icon set failed: %s", e)
 
     # Consolidated cross-platform / fallback PhotoImage icon
     if os.path.exists(ico_path):
@@ -99,37 +122,57 @@ def apply_window_icon(root):
                 if ok:
                     root._app_icon_ref = tk.PhotoImage(data=buf.tobytes())
                     root.iconphoto(True, root._app_icon_ref)
-        except (tk.TclError, cv2.error, OSError):
-            pass
+        except (tk.TclError, cv2.error, OSError) as e:
+            logger.debug("Fallback PhotoImage icon set failed: %s", e)
 
 
 # ==============================================================================
 # SAFE WORKING DIRECTORY SETUP & HARDWARE ACCELERATION
 # ==============================================================================
-def setup_safe_working_directory(folder_name="MouseAnalyzer_Eredmenyek"):
+def get_safe_base_dir(folder_name="MouseAnalyzer_Eredmenyek"):
+    """
+    Returns an absolute, writable directory path for application results and cache.
+    Prefers ~/Documents/MouseAnalyzer_Eredmenyek, falling back to ~ or tempdir if needed.
+    Does not mutate process working directory.
+    """
     docs_dir = os.path.expanduser("~/Documents")
-    if not os.path.exists(docs_dir):
+    if not os.path.exists(docs_dir) or not os.access(docs_dir, os.W_OK):
         docs_dir = os.path.expanduser("~")
     safe_dir = os.path.join(docs_dir, folder_name)
-    os.makedirs(safe_dir, exist_ok=True)
+    try:
+        os.makedirs(safe_dir, exist_ok=True)
+    except OSError as e:
+        logger.debug("Failed creating safe dir in %s (%s), falling back to tempdir", safe_dir, e)
+        safe_dir = os.path.join(tempfile.gettempdir(), folder_name)
+        os.makedirs(safe_dir, exist_ok=True)
+    return os.path.abspath(safe_dir)
+
+
+def setup_safe_working_directory(folder_name="MouseAnalyzer_Eredmenyek"):
+    safe_dir = get_safe_base_dir(folder_name)
     if hasattr(sys, "_MEIPASS") or not os.access(os.getcwd(), os.W_OK):
         try:
             os.chdir(safe_dir)
-        except OSError:
-            pass
+        except OSError as e:
+            logger.debug("Could not chdir to safe_dir: %s", e)
     return safe_dir
 
 
-SAFE_BASE_DIR = os.path.join(os.path.expanduser("~/Documents"), "MouseAnalyzer_Eredmenyek")
+SAFE_BASE_DIR = get_safe_base_dir()
 
+_CACHED_COMPUTE_DEVICE = None
 
 def get_optimal_compute_device():
     """
-    Centralized multi-tiered hardware acceleration detection.
+    Centralized multi-tiered hardware acceleration detection (cached).
     Evaluates NVIDIA CUDA, Apple Silicon MPS (Metal), and OpenCL in prioritized order.
     Returns:
         dict with keys: 'device' ('cuda:0'|'mps'|'cpu'), 'name', 'type', 'has_gpu', 'opencl_available'
     """
+    global _CACHED_COMPUTE_DEVICE
+    if _CACHED_COMPUTE_DEVICE is not None:
+        return _CACHED_COMPUTE_DEVICE.copy()
+
     info = {
         "device": "cpu",
         "name": "CPU",
@@ -140,26 +183,29 @@ def get_optimal_compute_device():
     try:
         if cv2.ocl.haveOpenCL():
             info["opencl_available"] = True
-    except (cv2.error, AttributeError):
-        pass
+    except (cv2.error, AttributeError) as e:
+        logger.debug("OpenCL query exception: %s", e)
 
-    try:
-        import torch
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available() and sys.platform == "darwin":
-            info["device"] = "mps"
-            info["name"] = "Apple Silicon Metal (MPS)"
-            info["type"] = "mps"
-            info["has_gpu"] = True
-            return info
-        if torch.cuda.is_available():
-            dev_name = torch.cuda.get_device_name(0) if torch.cuda.device_count() > 0 else "CUDA Device"
-            info["device"] = "cuda:0"
-            info["name"] = f"NVIDIA CUDA ({dev_name})"
-            info["type"] = "cuda"
-            info["has_gpu"] = True
-            return info
-    except (ImportError, AttributeError):
-        pass
+    torch = _get_torch()
+    if torch is not None:
+        try:
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available() and sys.platform == "darwin":
+                info["device"] = "mps"
+                info["name"] = "Apple Silicon Metal (MPS)"
+                info["type"] = "mps"
+                info["has_gpu"] = True
+                _CACHED_COMPUTE_DEVICE = info
+                return info.copy()
+            if torch.cuda.is_available():
+                dev_name = torch.cuda.get_device_name(0) if torch.cuda.device_count() > 0 else "CUDA Device"
+                info["device"] = "cuda:0"
+                info["name"] = f"NVIDIA CUDA ({dev_name})"
+                info["type"] = "cuda"
+                info["has_gpu"] = True
+                _CACHED_COMPUTE_DEVICE = info
+                return info.copy()
+        except (AttributeError, OSError) as e:
+            logger.debug("Torch device probe exception: %s", e)
 
     if info["opencl_available"]:
         try:
@@ -168,16 +214,17 @@ def get_optimal_compute_device():
             info["name"] = f"OpenCL ({dev_name})"
             info["type"] = "opencl"
             info["has_gpu"] = True
-        except (cv2.error, AttributeError):
-            pass
+        except (cv2.error, AttributeError) as e:
+            logger.debug("OpenCL device query exception: %s", e)
 
-    return info
+    _CACHED_COMPUTE_DEVICE = info
+    return info.copy()
 
 cv2.setUseOptimized(True)
 try:
     cv2.ocl.setUseOpenCL(True)
-except (cv2.error, AttributeError):
-    pass
+except (cv2.error, AttributeError) as e:
+    logger.debug("Failed setting OpenCL active: %s", e)
 
 
 # ==============================================================================
@@ -580,16 +627,16 @@ class ToolTip:
                 under = self.widget.winfo_containing(event.x_root, event.y_root)
                 if under == self.widget:
                     return
-            except (tk.TclError, AttributeError):
-                pass
+            except (tk.TclError, AttributeError) as e:
+                logger.debug("ToolTip check exception: %s", e)
         self._hide()
 
     def _cancel(self):
         if self.after_id is not None:
             try:
                 self.widget.after_cancel(self.after_id)
-            except (tk.TclError, AttributeError):
-                pass
+            except (tk.TclError, AttributeError) as e:
+                logger.debug("ToolTip after_cancel exception: %s", e)
             self.after_id = None
 
     def _show(self):
@@ -619,8 +666,8 @@ class ToolTip:
         tw.wm_overrideredirect(True)
         try:
             tw.attributes("-topmost", True)
-        except tk.TclError:
-            pass
+        except tk.TclError as e:
+            logger.debug("ToolTip topmost exception: %s", e)
 
         outer = tk.Frame(tw, bg="#334155", padx=1, pady=1)
         outer.pack()
@@ -649,8 +696,8 @@ class ToolTip:
         if self.tip_win is not None:
             try:
                 self.tip_win.destroy()
-            except (tk.TclError, AttributeError):
-                pass
+            except (tk.TclError, AttributeError) as e:
+                logger.debug("ToolTip destroy exception: %s", e)
             self.tip_win = None
         if ToolTip._active_tip is self:
             ToolTip._active_tip = None
@@ -751,8 +798,8 @@ def save_image_unicode(path, img):
         if is_success:
             im_buf_arr.tofile(path)
             return True
-    except (OSError, cv2.error):
-        pass
+    except (OSError, cv2.error) as e:
+        logger.debug("imwrite_unicode exception on %s: %s", path, e)
     return False
 
 
@@ -985,8 +1032,8 @@ def open_video_accelerated(video_path, use_hw=True, log_cb=print):
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     return cap
                 cap.release()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("HW acceleration VideoCapture exception: %s", e)
     return cv2.VideoCapture(resolved_path)
 
 
@@ -1062,17 +1109,15 @@ class AsyncVideoReader:
                 break
 
             crop = frame[self.v_ry:self.v_ry + self.v_rh, self.v_rx:self.v_rx + self.v_rw].copy()
-            # Store JPEG-compressed bytes instead of raw BGR frame to eliminate RAM bloat (~95% savings)
-            ok, frame_bytes = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-            frame_item = frame_bytes if ok else frame
-            if not self._safe_put((frame_idx, frame_item, crop)):
+            # Direct raw frame delivery - eliminates expensive full-frame JPEG compression overhead on hot path
+            if not self._safe_put((frame_idx, frame, crop)):
                 break
             frame_idx += 1
 
         try:
             self.q.put(None, timeout=0.1)
         except queue.Full:
-            pass
+            logger.debug("AsyncVideoReader queue full on EOF sentinel")
 
     def read(self):
         while not self.stopped:
@@ -1089,8 +1134,8 @@ class AsyncVideoReader:
         try:
             while not self.q.empty():
                 self.q.get_nowait()
-        except (queue.Empty, AttributeError):
-            pass
+        except (queue.Empty, AttributeError) as e:
+            logger.debug("AsyncVideoReader stop drain exception: %s", e)
         if self.thread.is_alive():
             self.thread.join(timeout=0.5)
 
@@ -1139,9 +1184,11 @@ class ParallelYoloOpenCVEngine:
 
     def _init_yolo(self):
         try:
-            if importlib.util.find_spec("ultralytics") is None:
-                return
             from ultralytics import YOLO
+        except ImportError:
+            return
+
+        try:
             hw_info = get_optimal_compute_device()
             self.device = hw_info["device"]
             self.batch_max_size = 4 if hw_info["has_gpu"] else 2
@@ -1180,10 +1227,11 @@ class ParallelYoloOpenCVEngine:
                             dummy = np.zeros((128, 128, 3), dtype=np.uint8)
                             self.yolo_model.predict(dummy, device=self.device, verbose=False, imgsz=128)
                             if self.device == "mps":
-                                import torch
-                                torch.mps.synchronize()
-                        except Exception:
-                            pass
+                                torch = _get_torch()
+                                if torch is not None and hasattr(torch, "mps"):
+                                    torch.mps.synchronize()
+                        except Exception as e:
+                            logger.debug("YOLO warmup exception: %s", e)
 
                     if self.is_rodent_pose:
                         mode_tag = "Custom 9-Keypoint Rodent Pose AI"
@@ -1193,7 +1241,8 @@ class ParallelYoloOpenCVEngine:
                         mode_tag = "YOLO Object Detection + OpenCV"
                     self.log(f"⚡ [{mode_tag}] Loaded '{candidate}' on ({self.device.upper()})")
                     return
-        except Exception:
+        except Exception as e:
+            logger.debug("YOLO initialization exception: %s", e)
             self.yolo_model = None
 
     def stop(self):
@@ -1201,8 +1250,8 @@ class ParallelYoloOpenCVEngine:
         if hasattr(self, "batch_queue"):
             try:
                 self.batch_queue.put(None)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("batch_queue shutdown sentinel error: %s", e)
         if self.batch_thread is not None and self.batch_thread.is_alive():
             self.batch_thread.join(timeout=0.5)
         if self.yolo_executor is not None:
@@ -1355,10 +1404,11 @@ class ParallelYoloOpenCVEngine:
                         )
                     if self.device == "mps":
                         try:
-                            import torch
-                            torch.mps.synchronize()
-                        except Exception:
-                            pass
+                            torch = _get_torch()
+                            if torch is not None and hasattr(torch, "mps"):
+                                torch.mps.synchronize()
+                        except Exception as e:
+                            logger.debug("MPS batch synchronize exception: %s", e)
                     names = getattr(self.yolo_model, "names", {}) or {}
 
                 fallback_indices = []
@@ -1388,10 +1438,11 @@ class ParallelYoloOpenCVEngine:
                             )
                         if self.device == "mps":
                             try:
-                                import torch
-                                torch.mps.synchronize()
-                            except Exception:
-                                pass
+                                torch = _get_torch()
+                                if torch is not None and hasattr(torch, "mps"):
+                                    torch.mps.synchronize()
+                            except Exception as e:
+                                logger.debug("MPS fallback synchronize exception: %s", e)
                         names = getattr(self.yolo_model, "names", {}) or {}
 
                     for k, orig_idx in enumerate(fallback_indices):
@@ -1487,10 +1538,11 @@ class ParallelYoloOpenCVEngine:
                 )
                 if self.device == "mps":
                     try:
-                        import torch
-                        torch.mps.synchronize()
-                    except Exception:
-                        pass
+                        torch = _get_torch()
+                        if torch is not None and hasattr(torch, "mps"):
+                            torch.mps.synchronize()
+                    except Exception as e:
+                        logger.debug("MPS direct synchronize exception: %s", e)
                 names = getattr(self.yolo_model, "names", {}) or {}
 
             if (not results or len(results[0].boxes) == 0) and sub_offset != (0, 0):
@@ -1500,10 +1552,11 @@ class ParallelYoloOpenCVEngine:
                     )
                     if self.device == "mps":
                         try:
-                            import torch
-                            torch.mps.synchronize()
-                        except Exception:
-                            pass
+                            torch = _get_torch()
+                            if torch is not None and hasattr(torch, "mps"):
+                                torch.mps.synchronize()
+                        except Exception as e:
+                            logger.debug("MPS direct fallback synchronize exception: %s", e)
                     names = getattr(self.yolo_model, "names", {}) or {}
                 sub_offset = (0, 0)
                 infer_rw, infer_rh = rw, rh
@@ -2243,8 +2296,8 @@ class DLCAddonManager:
         try:
             with open(manifest_path, "w", encoding="utf-8") as f:
                 json.dump(manifest, f, indent=4, ensure_ascii=False)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed writing dlc_training_metadata.json: %s", e)
 
         self.log(f"[Active Learning] {exported_count} training crops exported to: {os.path.abspath(base_folder)}")
         return exported_count
@@ -2343,8 +2396,8 @@ class DLCAddonManager:
                         scale_list=[200, 300]
                     )
                     parsed_from_dlc = self._parse_superanimal_keypoints_if_any(temp_dir, crop_records, tw, th)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("SuperAnimal inference exception: %s", e)
             finally:
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -2628,7 +2681,7 @@ class DLCAddonManager:
                 progress_cb(0.0, f"Hiba: Legalább 6 aktív minta szükséges a betanításhoz! (Jelenleg {len(active)} aktív, {omitted_count} kizárva)")
             return None
 
-        import torch
+        torch = _get_torch()
         from ultralytics import YOLO
 
         train_device = get_optimal_compute_device()["device"]
@@ -2751,8 +2804,8 @@ class DLCAddonManager:
                     local_pt = get_resource_path("rodent_detector.pt")
                     if os.path.abspath(local_pt) != os.path.abspath(target_pt) and os.access(os.path.dirname(local_pt), os.W_OK):
                         shutil.copy2(best_pt, local_pt)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Local rodent_detector copy error: %s", e)
                 self.log(f"✅ [Rodent AI Trainer] Custom model saved: {target_pt}")
                 if hasattr(app_ref, "hybrid_locator"):
                     app_ref.hybrid_locator._init_yolo()
@@ -2798,7 +2851,7 @@ class DLCAddonManager:
                 progress_cb(0.0, f"Hiba: Legalább 6 aktív minta szükséges a betanításhoz! (Jelenleg {len(active)} aktív, {omitted_count} kizárva)")
             return None
 
-        import torch
+        torch = _get_torch()
         from ultralytics import YOLO
 
         train_device = get_optimal_compute_device()["device"]
@@ -2960,8 +3013,8 @@ class DLCAddonManager:
                         vals = tloss.detach().cpu().numpy().flatten()
                         if len(vals) >= 2:
                             loss_str = f" | BoxLoss: {vals[0]:.3f}, PoseLoss: {vals[1]:.3f}"
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("tloss parse error: %s", e)
                 if progress_cb:
                     progress_cb(pct, f"Korszak {curr_ep}/{tot_ep}: 9-pontos Paw Pose tréning ({train_device.upper()}){loss_str}")
 
@@ -2999,8 +3052,8 @@ class DLCAddonManager:
                     local_pt = get_resource_path("mouse_pose_ai.pt")
                     if os.path.abspath(local_pt) != os.path.abspath(target_pt) and os.access(os.path.dirname(local_pt), os.W_OK):
                         shutil.copy2(best_pt, local_pt)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Local mouse_pose_ai copy error: %s", e)
 
                 self.log(f"✅ [Paw AI Trainer] Custom 9-keypoint Paw Pose model saved: {target_pt}")
                 if hasattr(app_ref, "hybrid_locator"):
@@ -3094,533 +3147,6 @@ class DLCAddonManager:
         except Exception as exc:
             self.log(f"⚠ [Rodent AI] Prediction error: {exc}")
             return 0, 0
-
-
-
-    def train_rodent_pose_from_samples(self, app_ref, samples, epochs=12, imgsz=256, progress_cb=None, stop_event=None):
-        """
-        PyInstaller-safe & Unicode-safe 9-keypoint Rodent Pose AI trainer (mouse_pose_ai.pt).
-        Runs in-process on the background worker thread using Ultralytics callbacks
-        (eliminates sys.executable fork-bombs in frozen .exe / .app builds).
-        """
-        active = [s for s in samples if not s.get("excluded", False)]
-        omitted_count = len(samples) - len(active)
-        self.log(
-            f"🧠 [Paw AI Trainer] Dataset summary: {len(active)} active rodent samples. "
-            f"{omitted_count} excluded samples completely omitted from training."
-        )
-        manual_pts_count = sum(
-            sum(1 for k in ["fore_paw_pt", "hind_paw_pt", "nose_pt", "tail_base"] if (s.get("anatomy") or {}).get(f"{k}_manual"))
-            for s in active
-        )
-        if manual_pts_count > 0:
-            self.log(f"🎯 [Paw AI Trainer] {manual_pts_count} db kézzel bejelölt mancs/testrész kulcspont szerepel a tanítóhalmazban!")
-
-        if len(active) < 6:
-            self.log(f"⚠ [Paw AI Trainer] Need at least 6 active samples (have {len(active)} active, {omitted_count} excluded).")
-            if progress_cb:
-                progress_cb(0.0, f"Hiba: Legalább 6 aktív minta szükséges a betanításhoz! (Jelenleg {len(active)} aktív, {omitted_count} kizárva)")
-            return None
-
-        import torch
-        from ultralytics import YOLO
-
-        train_device = get_optimal_compute_device()["device"]
-
-        dataset_dir = tempfile.mkdtemp(prefix="mouse_pose_ds_")
-        try:
-            img_tr = os.path.join(dataset_dir, "images", "train")
-            img_va = os.path.join(dataset_dir, "images", "val")
-            lbl_tr = os.path.join(dataset_dir, "labels", "train")
-            lbl_va = os.path.join(dataset_dir, "labels", "val")
-            for d_p in (img_tr, img_va, lbl_tr, lbl_va):
-                os.makedirs(d_p, exist_ok=True)
-
-            kpt_order = [
-                "nose_pt", "head_pt", "shoulder_pt", "fore_paw_pt",
-                "spine_mid", "hip_pt", "hind_paw_pt", "tail_base", "tail_tip"
-            ]
-
-            for idx, s in enumerate(active):
-                if stop_event and stop_event.is_set():
-                    return None
-
-                crop, _ = unpack_sample_images(s)
-                if crop is None:
-                    continue
-                bx, by, bw, bh = s["bbox"]
-                rh, rw = crop.shape[:2]
-                anat = s.get("anatomy") or {}
-
-                # Garantáljuk, hogy kis mintaszámnál is legyen validációs kép
-                is_val = (idx % 5 == 0) or (idx == len(active) - 1 and idx < 5)
-                tgt_img = img_va if is_val else img_tr
-                tgt_lbl = lbl_va if is_val else lbl_tr
-
-                kpts_coords = {}
-                for k_name in kpt_order:
-                    pt = anat.get(k_name)
-                    if pt is not None:
-                        kpts_coords[k_name] = (float(pt[0]), float(pt[1]))
-                    else:
-                        if k_name == "nose_pt":
-                            kpts_coords[k_name] = (float(bx + bw), float(by + bh * 0.6))
-                        elif k_name == "head_pt":
-                            kpts_coords[k_name] = (float(bx + bw * 0.85), float(by + bh * 0.5))
-                        elif k_name == "shoulder_pt":
-                            kpts_coords[k_name] = (float(bx + bw * 0.65), float(by + bh * 0.5))
-                        elif k_name == "fore_paw_pt":
-                            kpts_coords[k_name] = (float(bx + bw * 0.60), float(by + bh * 0.9))
-                        elif k_name == "spine_mid":
-                            kpts_coords[k_name] = (float(bx + bw * 0.48), float(by + bh * 0.45))
-                        elif k_name == "hip_pt":
-                            kpts_coords[k_name] = (float(bx + bw * 0.25), float(by + bh * 0.5))
-                        elif k_name == "hind_paw_pt":
-                            kpts_coords[k_name] = (float(bx + bw * 0.22), float(by + bh * 0.9))
-                        elif k_name == "tail_base":
-                            kpts_coords[k_name] = (float(bx + bw * 0.05), float(by + bh * 0.5))
-                        else:
-                            kpts_coords[k_name] = (float(max(0, bx - 15)), float(by + bh * 0.5))
-
-                # 1. Teljes létra-kivágás (tág térbeli kontextus)
-                cx_n = np.clip((bx + bw * 0.5) / float(rw), 0.01, 0.99)
-                cy_n = np.clip((by + bh * 0.5) / float(rh), 0.01, 0.99)
-                bw_n = np.clip(bw / float(rw), 0.02, 0.98)
-                bh_n = np.clip(bh / float(rh), 0.02, 0.98)
-
-                lbl_parts_full = [f"0 {cx_n:.6f} {cy_n:.6f} {bw_n:.6f} {bh_n:.6f}"]
-                for k_name in kpt_order:
-                    kx, ky = kpts_coords[k_name]
-                    kx_n = np.clip(kx / float(rw), 0.001, 0.999)
-                    ky_n = np.clip(ky / float(rh), 0.001, 0.999)
-                    # v=2 csak valós anatómiai vagy kézzel megjelölt pont esetén, fallback esetén v=0 (loss nem büntet)
-                    v_flag = 2 if (anat.get(k_name) is not None) else 0
-                    lbl_parts_full.append(f"{kx_n:.6f} {ky_n:.6f} {v_flag}")
-                lbl_line_full = " ".join(lbl_parts_full) + "\n"
-
-                stem_full = f"pose_f_{idx:04d}"
-                # UNICODE-BIZTOS MENTÉS (cv2.imwrite helyett)
-                save_image_unicode(os.path.join(tgt_img, f"{stem_full}.jpg"), crop)
-                with open(os.path.join(tgt_lbl, f"{stem_full}.txt"), "w", encoding="utf-8") as lf:
-                    lf.write(lbl_line_full)
-
-                # 2. Egérre és mancsokra fókuszált nagyfelbontású kivágás
-                pad_w = int(max(40, bw * 0.35))
-                pad_h_top = int(max(20, bh * 0.25))
-                pad_h_bot = int(max(30, bh * 0.45))
-                c_x1 = max(0, bx - pad_w)
-                c_y1 = max(0, by - pad_h_top)
-                c_x2 = min(rw, bx + bw + pad_w)
-                c_y2 = min(rh, by + bh + pad_h_bot)
-
-                ctx_crop = crop[c_y1:c_y2, c_x1:c_x2]
-                ch, cw = ctx_crop.shape[:2]
-                if ch >= 30 and cw >= 40:
-                    rel_bx = bx - c_x1
-                    rel_by = by - c_y1
-                    rel_cx_n = np.clip((rel_bx + bw * 0.5) / float(cw), 0.01, 0.99)
-                    rel_cy_n = np.clip((rel_by + bh * 0.5) / float(ch), 0.01, 0.99)
-                    rel_bw_n = np.clip(bw / float(cw), 0.02, 0.98)
-                    rel_bh_n = np.clip(bh / float(ch), 0.02, 0.98)
-
-                    lbl_parts_ctx = [f"0 {rel_cx_n:.6f} {rel_cy_n:.6f} {rel_bw_n:.6f} {rel_bh_n:.6f}"]
-                    for k_name in kpt_order:
-                        kx, ky = kpts_coords[k_name]
-                        rel_kx = np.clip((kx - c_x1) / float(cw), 0.001, 0.999)
-                        rel_ky = np.clip((ky - c_y1) / float(ch), 0.001, 0.999)
-                        v_flag = 2 if (anat.get(k_name) is not None) else 0
-                        lbl_parts_ctx.append(f"{rel_kx:.6f} {rel_ky:.6f} {v_flag}")
-                    lbl_line_ctx = " ".join(lbl_parts_ctx) + "\n"
-
-                    stem_ctx = f"pose_c_{idx:04d}"
-                    save_image_unicode(os.path.join(tgt_img, f"{stem_ctx}.jpg"), ctx_crop)
-                    with open(os.path.join(tgt_lbl, f"{stem_ctx}.txt"), "w", encoding="utf-8") as lf:
-                        lf.write(lbl_line_ctx)
-
-            # POSIX perjelek használata a YAML-ban, hogy Windows alatt se akadjon el a parser
-            safe_ds_path = dataset_dir.replace("\\", "/")
-            yaml_path = os.path.join(dataset_dir, "mouse_pose.yaml")
-            yaml_content = (
-                f"path: '{safe_ds_path}'\n"
-                f"train: images/train\n"
-                f"val: images/val\n"
-                f"kpt_shape: [9, 3]\n"
-                f"flip_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8]\n"
-                f"names:\n"
-                f"  0: rodent\n"
-            )
-            with open(yaml_path, "w", encoding="utf-8") as yf:
-                yf.write(yaml_content)
-
-            base_pt = get_resource_path("mouse_pose_ai.pt")
-            if not os.path.exists(base_pt):
-                base_pt = os.path.join(SAFE_BASE_DIR, "mouse_pose_ai.pt")
-            if not os.path.exists(base_pt):
-                base_pt = get_resource_path("yolov8n-pose.pt")
-            if not os.path.exists(base_pt):
-                base_pt = "yolov8n-pose.pt"
-
-            runs_dir = os.path.join(dataset_dir, "runs")
-            tot_ep = max(1, int(epochs))
-
-            if progress_cb:
-                progress_cb(5.0, f"Tréning indítása: {len(active)} aktív minta, {tot_ep} korszak ({train_device.upper()})...")
-
-            # --- IN-PROCESS ULTRALYTICS CALLBACKS (PyInstaller-biztos) ---
-            def _on_train_batch_end(trainer):
-                if stop_event and stop_event.is_set():
-                    trainer.stop = True
-
-            def _on_train_epoch_end(trainer):
-                if stop_event and stop_event.is_set():
-                    trainer.stop = True
-                    return
-                curr_ep = int(getattr(trainer, "epoch", 0)) + 1
-                pct = min(95.0, 5.0 + 90.0 * (curr_ep / float(tot_ep)))
-                loss_str = ""
-                try:
-                    tloss = getattr(trainer, "tloss", None)
-                    if tloss is not None:
-                        vals = tloss.detach().cpu().numpy().flatten()
-                        if len(vals) >= 2:
-                            loss_str = f" | BoxLoss: {vals[0]:.3f}, PoseLoss: {vals[1]:.3f}"
-                except Exception:
-                    pass
-                if progress_cb:
-                    progress_cb(pct, f"Korszak {curr_ep}/{tot_ep}: 9-pontos Paw Pose tréning ({train_device.upper()}){loss_str}")
-
-            model = YOLO(base_pt)
-            model.add_callback("on_train_batch_end", _on_train_batch_end)
-            model.add_callback("on_train_epoch_end", _on_train_epoch_end)
-
-            model.train(
-                data=yaml_path,
-                epochs=tot_ep,
-                imgsz=int(imgsz),
-                batch=min(16, max(2, len(active))),
-                device=train_device,
-                project=runs_dir,
-                name="mouse_pose_run",
-                exist_ok=True,
-                fliplr=0.0,
-                amp=False,
-                verbose=False,
-                plots=False,
-                workers=0,  # KRITIKUS PyInstallerhez és macOS/Windows stabilitáshoz!
-            )
-
-            if stop_event and stop_event.is_set():
-                return None
-
-            best_pt = os.path.join(runs_dir, "mouse_pose_run", "weights", "best.pt")
-            if not os.path.exists(best_pt):
-                best_pt = os.path.join(runs_dir, "mouse_pose_run", "weights", "last.pt")
-
-            if os.path.exists(best_pt):
-                target_pt = os.path.join(SAFE_BASE_DIR, "mouse_pose_ai.pt")
-                shutil.copy2(best_pt, target_pt)
-                try:
-                    local_pt = get_resource_path("mouse_pose_ai.pt")
-                    if os.path.abspath(local_pt) != os.path.abspath(target_pt) and os.access(os.path.dirname(local_pt), os.W_OK):
-                        shutil.copy2(best_pt, local_pt)
-                except Exception:
-                    pass
-
-                self.log(f"✅ [Paw AI Trainer] Custom 9-keypoint Paw Pose model saved: {target_pt}")
-                if hasattr(app_ref, "hybrid_locator"):
-                    app_ref.hybrid_locator._init_yolo()
-                    if hasattr(app_ref, "_refresh_kpi_summary"):
-                        app_ref.root.after(0, app_ref._refresh_kpi_summary)
-                if progress_cb:
-                    progress_cb(100.0, "✅ Betanítás sikeres! Modell mentve: mouse_pose_ai.pt (Mancs & Tartás specializáció)")
-                return target_pt
-            else:
-                if progress_cb:
-                    progress_cb(0.0, "❌ Hiba: A betanított súlyfájl nem jött létre.")
-                return None
-        except Exception as exc:
-            self.log(f"❌ [Paw AI Trainer] Training error: {exc}")
-            if progress_cb:
-                progress_cb(0.0, f"Hiba a tréning során: {exc}")
-            return None
-        finally:
-            shutil.rmtree(dataset_dir, ignore_errors=True)
-
-    def test_model_on_samples(self, model_path, samples):
-        """
-        Runs post-training verification strictly on active (non-excluded) preview samples.
-        Any sample marked as excluded is explicitly skipped and has its ai_pred_bbox & ai_pred_pose wiped.
-        Extracts both bounding boxes and 9 anatomical keypoints (Forepaw and Hindpaw).
-        """
-        for s in samples:
-            if s.get("excluded", False):
-                s["ai_pred_bbox"] = None
-                s["ai_pred_pose"] = None
-
-        if not os.path.exists(model_path):
-            return 0, 0
-        try:
-            from ultralytics import YOLO
-            model = YOLO(model_path)
-            is_pose = ("pose" in model_path.lower()) or getattr(model, "task", "") == "pose"
-            kpt_order = [
-                "nose_pt", "head_pt", "shoulder_pt", "fore_paw_pt",
-                "spine_mid", "hip_pt", "hind_paw_pt", "tail_base", "tail_tip"
-            ]
-            detected_count = 0
-            active_count = 0
-            for s in samples:
-                # STRICT EXCLUSION ENFORCEMENT:
-                if s.get("excluded", False):
-                    s["ai_pred_bbox"] = None
-                    s["ai_pred_pose"] = None
-                    continue
-
-                active_count += 1
-                crop, _ = unpack_sample_images(s)
-                if crop is None:
-                    s["ai_pred_bbox"] = None
-                    s["ai_pred_pose"] = None
-                    continue
-
-                res = model.predict(crop, imgsz=256, conf=0.18, verbose=False)
-                if res and len(res) > 0 and len(res[0].boxes) > 0:
-                    box = res[0].boxes[0]
-                    xyxy = box.xyxy[0].cpu().numpy()
-                    conf = float(box.conf[0].cpu().numpy())
-                    x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
-                    s["ai_pred_bbox"] = (x1, y1, max(1, x2 - x1), max(1, y2 - y1), conf)
-                    detected_count += 1
-
-                    # Extract Keypoints for Pose Model:
-                    if is_pose and getattr(res[0], "keypoints", None) is not None and res[0].keypoints.xy is not None and len(res[0].keypoints.xy) > 0:
-                        kpts_xy = res[0].keypoints.xy[0].cpu().numpy()
-                        kpts_conf = (
-                            res[0].keypoints.conf[0].cpu().numpy()
-                            if getattr(res[0].keypoints, "conf", None) is not None
-                            else np.ones(len(kpts_xy), dtype=np.float32)
-                        )
-                        parsed_pose = {}
-                        for k_idx, k_name in enumerate(kpt_order):
-                            if k_idx < len(kpts_xy):
-                                kx, ky = float(kpts_xy[k_idx][0]), float(kpts_xy[k_idx][1])
-                                kc = float(kpts_conf[k_idx]) if k_idx < len(kpts_conf) else 1.0
-                                if kx > 1.0 and ky > 1.0:
-                                    parsed_pose[k_name] = (int(round(kx)), int(round(ky)))
-                                    parsed_pose[k_name + "_conf"] = kc
-                        s["ai_pred_pose"] = parsed_pose
-                    else:
-                        s["ai_pred_pose"] = None
-                else:
-                    s["ai_pred_bbox"] = None
-                    s["ai_pred_pose"] = None
-            return detected_count, active_count
-        except Exception as exc:
-            self.log(f"⚠ [Rodent AI] Prediction error: {exc}")
-            return 0, 0
-
-
-    def train_custom_yolo_pose_model(self, app_ref, video_paths=None, epochs=14, imgsz=256, max_samples_per_video=45):
-        if not self.yolo_available:
-            self.log("❌ [AI Pose Trainer] 'ultralytics' package not available.")
-            return None
-
-        if video_paths is None:
-            video_paths = [v["path"] for v in getattr(app_ref, "video_data", []) if os.path.exists(v.get("path", ""))]
-        if not video_paths:
-            self.log("⚠ [AI Pose Trainer] No loaded videos for training.")
-            return None
-
-        train_device = get_optimal_compute_device()["device"]
-
-        dataset_dir = tempfile.mkdtemp(prefix="mouse_yolo_pose_ds_")
-        try:
-            img_tr = os.path.join(dataset_dir, "images", "train")
-            img_va = os.path.join(dataset_dir, "images", "val")
-            lbl_tr = os.path.join(dataset_dir, "labels", "train")
-            lbl_va = os.path.join(dataset_dir, "labels", "val")
-            for d_p in (img_tr, img_va, lbl_tr, lbl_va):
-                os.makedirs(d_p, exist_ok=True)
-
-            kpt_order = [
-                "nose_pt", "head_pt", "shoulder_pt", "fore_paw_pt",
-                "spine_mid", "hip_pt", "hind_paw_pt", "tail_base", "tail_tip"
-            ]
-            rng = np.random.default_rng(42)
-            sample_count = 0
-            pair_idx = 0
-
-            self.log(f"🧠 [AI Pose Trainer] Building 9-keypoint rodent dataset from {len(video_paths)} videos...")
-
-            for v_idx, v_path in enumerate(video_paths):
-                cap = cv2.VideoCapture(v_path)
-                if not cap.isOpened():
-                    continue
-                auto_res = app_ref.auto_engine.auto_calibrate_from_video(cap, num_bg_samples=24)
-                rx, ry, rw, rh = auto_res["rx"], auto_res["ry"], auto_res["rw"], auto_res["rh"]
-                dark_t = auto_res["calib_dark_thresh"]
-                diff_t = auto_res["calib_diff_thresh"]
-                ladder_t = auto_res["calib_ladder_thresh"]
-                fault_pct = auto_res["calib_fault_Ratio"]
-                fault_y_local = int(rh * (fault_pct / 100.0))
-                base_gray = app_ref._compute_clean_background(cap, rx, ry, rw, rh, num_samples=24)
-                if base_gray is None:
-                    cap.release()
-                    continue
-                base_smooth = cv2.GaussianBlur(base_gray, (3, 3), 0)
-                ladder_m = app_ref._create_ladder_mask(base_gray, ladder_t, fault_y_local=fault_y_local)
-                inv_ladder = cv2.bitwise_not(ladder_m)
-                fault_curve = np.full(rw, fault_y_local, dtype=np.int32)
-
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                total_f = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 300
-                step = max(2, total_f // max(45, max_samples_per_video * 3))
-                f_idx = 0
-                prev_bbox = None
-                collected_vid = 0
-
-                while cap.isOpened() and collected_vid < max_samples_per_video:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    if f_idx % step != 0:
-                        f_idx += 1
-                        continue
-                    f_idx += 1
-
-                    crop = frame[ry:ry + rh, rx:rx + rw]
-                    det, mask, bbox, skin_m = app_ref._detect_mouse_on_crop(
-                        crop, base_gray, inv_ladder, rw, rh, dark_t, diff_t,
-                        fault_y_local=fault_y_local, previous_bbox=prev_bbox,
-                        base_smooth_cached=base_smooth, return_skin=True, use_yolo=False
-                    )
-                    if not det or bbox is None or mask is None:
-                        prev_bbox = None
-                        continue
-                    prev_bbox = bbox
-                    bx, by, bw, bh = bbox
-                    if bw < 32 or bh < 22 or bx <= 4 or (bx + bw) >= rw - 4:
-                        continue
-
-                    anat = app_ref._extract_rodent_anatomy(
-                        mask, fault_curve, bbox, previous_bbox=prev_bbox,
-                        move_dir=1.0, crop=crop, skin_map=skin_m
-                    )
-                    if anat is None or anat.get("torso_width", 0) < 26:
-                        continue
-
-                    cx_n = np.clip((bx + bw * 0.5) / float(rw), 0.01, 0.99)
-                    cy_n = np.clip((by + bh * 0.5) / float(rh), 0.01, 0.99)
-                    bw_n = np.clip(bw / float(rw), 0.02, 0.98)
-                    bh_n = np.clip(bh / float(rh), 0.02, 0.98)
-                    lbl_parts = [f"0 {cx_n:.6f} {cy_n:.6f} {bw_n:.6f} {bh_n:.6f}"]
-                    for k_name in kpt_order:
-                        pt = anat.get(k_name, (bx + bw * 0.5, by + bh * 0.5))
-                        kx_n = np.clip(float(pt[0]) / float(rw), 0.001, 0.999)
-                        ky_n = np.clip(float(pt[1]) / float(rh), 0.001, 0.999)
-                        lbl_parts.append(f"{kx_n:.6f} {ky_n:.6f} 2")
-                    lbl_line = " ".join(lbl_parts) + "\n"
-
-                    is_val = (pair_idx % 5 == 0)
-                    pair_idx += 1
-                    target_img_dir = img_va if is_val else img_tr
-                    target_lbl_dir = lbl_va if is_val else lbl_tr
-
-                    stem = f"vid{v_idx}_f{f_idx}_clean"
-                    cv2.imwrite(os.path.join(target_img_dir, f"{stem}.jpg"), crop)
-                    with open(os.path.join(target_lbl_dir, f"{stem}.txt"), "w", encoding="utf-8") as lf:
-                        lf.write(lbl_line)
-                    sample_count += 1
-                    collected_vid += 1
-
-                    if not is_val:
-                        aug_crop = crop.copy()
-                        num_bars = int(rng.integers(2, 5))
-                        for _ in range(num_bars):
-                            bar_x = int(rng.integers(max(0, bx + 4), max(bx + 8, min(rw - 6, bx + bw - 4))))
-                            bar_w = int(rng.integers(3, 7))
-                            y_top = max(0, int(fault_y_local - rng.integers(14, 34)))
-                            y_bot = min(rh, int(fault_y_local + rng.integers(16, 36)))
-                            glare_val = int(rng.integers(185, 245))
-                            edge_val = int(rng.integers(55, 95))
-                            cv2.rectangle(aug_crop, (bar_x - 1, y_top), (bar_x + bar_w + 1, y_bot), (edge_val, edge_val, edge_val), -1)
-                            cv2.rectangle(aug_crop, (bar_x, y_top), (bar_x + bar_w, y_bot), (glare_val, glare_val, glare_val), -1)
-                        stem_aug = f"vid{v_idx}_f{f_idx}_rungaug"
-                        cv2.imwrite(os.path.join(img_tr, f"{stem_aug}.jpg"), aug_crop)
-                        with open(os.path.join(lbl_tr, f"{stem_aug}.txt"), "w", encoding="utf-8") as lf:
-                            lf.write(lbl_line)
-                        sample_count += 1
-
-                cap.release()
-
-            if sample_count < 8:
-                self.log("⚠ [AI Pose Trainer] Not enough clean frames for training.")
-                return None
-
-            yaml_path = os.path.join(dataset_dir, "mouse_pose.yaml")
-            yaml_content = (
-                f"path: {dataset_dir}\n"
-                f"train: images/train\n"
-                f"val: images/val\n"
-                f"kpt_shape: [9, 3]\n"
-                f"flip_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8]\n"
-                f"names:\n"
-                f"  0: rodent\n"
-            )
-            with open(yaml_path, "w", encoding="utf-8") as yf:
-                yf.write(yaml_content)
-
-            self.log(f"🚀 [AI Pose Trainer] Training YOLOv8n-Pose model ({train_device.upper()}, {epochs} epochs)...")
-            base_pose_pt = get_resource_path("yolov8n-pose.pt")
-            if not os.path.exists(base_pose_pt):
-                base_pose_pt = "yolov8n-pose.pt"
-
-            runs_dir = os.path.join(dataset_dir, "runs")
-            # In-process tréning (PyInstaller-biztos: nincs sys.executable fork)
-            from ultralytics import YOLO
-            pose_model = YOLO(base_pose_pt)
-            pose_model.train(
-                data=yaml_path,
-                epochs=int(epochs),
-                imgsz=int(imgsz),
-                batch=16,
-                device=train_device,
-                project=runs_dir,
-                name="mouse_pose",
-                exist_ok=True,
-                fliplr=0.0,
-                amp=False,
-                verbose=False,
-                plots=False,
-                workers=0,
-            )
-
-            best_pt = os.path.join(runs_dir, "mouse_pose", "weights", "best.pt")
-            if not os.path.exists(best_pt):
-                best_pt = os.path.join(runs_dir, "mouse_pose", "weights", "last.pt")
-
-            if os.path.exists(best_pt):
-                target_pt = os.path.join(SAFE_BASE_DIR, "mouse_pose_ai.pt")
-                shutil.copy2(best_pt, target_pt)
-                try:
-                    local_pt = get_resource_path("mouse_pose_ai.pt")
-                    if os.path.abspath(local_pt) != os.path.abspath(target_pt) and os.access(os.path.dirname(local_pt), os.W_OK):
-                        shutil.copy2(best_pt, local_pt)
-                except Exception:
-                    pass
-                self.log(f"✅ [AI Pose Trainer] Custom 9-keypoint rodent model saved: {target_pt}")
-                if hasattr(app_ref, "hybrid_locator"):
-                    app_ref.hybrid_locator._init_yolo()
-                    if hasattr(app_ref, "_refresh_kpi_summary"):
-                        app_ref.root.after(0, app_ref._refresh_kpi_summary)
-                return target_pt
-            return None
-        except Exception as exc:
-            self.log(f"❌ [AI Pose Trainer] Training error: {exc}")
-            return None
-        finally:
-            shutil.rmtree(dataset_dir, ignore_errors=True)
-
 
 # ==============================================================================
 # MAIN APPLICATION — PROFESSIONAL SCIENTIFIC WORKSTATION GUI
@@ -5419,8 +4945,8 @@ class PerVideoIDTrackerApp:
                 with open(default_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 self._apply_profile_dict(data)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed autoloading last profile: %s", e)
 
     def save_calibration_json(self):
         fpath = filedialog.asksaveasfilename(
@@ -5465,8 +4991,8 @@ class PerVideoIDTrackerApp:
                 self.log_area.config(state="disabled")
         try:
             self.root.after(0, _append)
-        except (RuntimeError, tk.TclError):
-            pass
+        except (RuntimeError, tk.TclError) as e:
+            logger.debug("log dispatch error: %s", e)
 
     def update_row_status(self, uid, status_text):
         def _update():
@@ -5476,8 +5002,8 @@ class PerVideoIDTrackerApp:
                 self.tree.item(uid, values=vals)
         try:
             self.root.after(0, _update)
-        except (RuntimeError, tk.TclError):
-            pass
+        except (RuntimeError, tk.TclError) as e:
+            logger.debug("update_row_status error: %s", e)
 
     def increment_progress(self, total):
         def _inc():
@@ -5487,8 +5013,8 @@ class PerVideoIDTrackerApp:
             self.progress_lbl.config(text=self.tr("prog_run", done=self.completed_videos, total=total, pct=pct))
         try:
             self.root.after(0, _inc)
-        except (RuntimeError, tk.TclError):
-            pass
+        except (RuntimeError, tk.TclError) as e:
+            logger.debug("increment_progress error: %s", e)
 
     def browse_videos(self):
         files = filedialog.askopenfilenames(
@@ -5625,8 +5151,8 @@ class PerVideoIDTrackerApp:
         if self._inline_id_entry and self._inline_id_entry.winfo_exists():
             try:
                 self._inline_id_entry.destroy()
-            except (tk.TclError, AttributeError):
-                pass
+            except (tk.TclError, AttributeError) as e:
+                logger.debug("Inline id entry destroy exception: %s", e)
             self._inline_id_entry = None
         sel = self.tree.selection()
         if not sel:
@@ -5643,8 +5169,8 @@ class PerVideoIDTrackerApp:
         if self._inline_id_entry and self._inline_id_entry.winfo_exists():
             try:
                 self._inline_id_entry.destroy()
-            except (tk.TclError, AttributeError):
-                pass
+            except (tk.TclError, AttributeError) as e:
+                logger.debug("Inline id entry destroy exception: %s", e)
             self._inline_id_entry = None
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -5691,8 +5217,8 @@ class PerVideoIDTrackerApp:
         if self._inline_id_entry and self._inline_id_entry.winfo_exists():
             try:
                 self._inline_id_entry.destroy()
-            except (tk.TclError, AttributeError):
-                pass
+            except (tk.TclError, AttributeError) as e:
+                logger.debug("Inline id entry cleanup exception: %s", e)
             self._inline_id_entry = None
 
         bbox = self.tree.bbox(uid, "animal_id")
@@ -7255,8 +6781,8 @@ class PerVideoIDTrackerApp:
             try:
                 self.root.update_idletasks()
                 self.root.update()
-            except (tk.TclError, RuntimeError):
-                pass
+            except (tk.TclError, RuntimeError) as e:
+                logger.debug("Calibration loop update ignored: %s", e)
 
             if not is_window_open(win_calib):
                 close_opencv_windows()
@@ -7372,8 +6898,8 @@ class PerVideoIDTrackerApp:
             default_profile_path = os.path.join(self.output_base_dir, "utolso_kalibracio.json")
             with open(default_profile_path, "w", encoding="utf-8") as f:
                 json.dump(self._build_profile_dict(), f, indent=4, ensure_ascii=False)
-        except OSError:
-            pass
+        except OSError as e:
+            logger.debug("Could not write default profile %s: %s", default_profile_path, e)
 
         self._launch_processing_thread(rx, ry, rw, rh, left_gate_x, right_gate_x)
 
@@ -7472,14 +6998,14 @@ class PerVideoIDTrackerApp:
         gpu_active = bool(use_gpu and self.gpu_available)
         try:
             cv2.ocl.setUseOpenCL(gpu_active)
-        except (cv2.error, AttributeError):
-            pass
+        except (cv2.error, AttributeError) as e:
+            logger.debug("OpenCL configuration skipped: %s", e)
 
         try:
             cpu_cores = os.cpu_count() or 4
             cv2.setNumThreads(max(1, cpu_cores // max(1, min(max_workers, total_videos))))
-        except (cv2.error, AttributeError):
-            pass
+        except (cv2.error, AttributeError) as e:
+            logger.debug("OpenCV thread limit configuration skipped: %s", e)
 
         try:
             use_yolo_fusion = bool(self.var_yolo_fusion.get())
@@ -8564,8 +8090,8 @@ class PerVideoIDTrackerApp:
         def confirm_and_close(event=None):
             try:
                 rev_win.grab_release()
-            except (tk.TclError, RuntimeError):
-                pass
+            except (tk.TclError, RuntimeError) as e:
+                logger.debug("Review window grab release skipped: %s", e)
             rev_win.destroy()
             self.finalize_and_export_all()
 
@@ -8929,8 +8455,8 @@ class PerVideoIDTrackerApp:
         finally:
             try:
                 self.root.after(0, self.reset_ui)
-            except (RuntimeError, tk.TclError):
-                pass
+            except (RuntimeError, tk.TclError) as e:
+                logger.debug("Final UI reset dispatch skipped: %s", e)
 
     def stop_analysis(self):
         self.is_running = False
