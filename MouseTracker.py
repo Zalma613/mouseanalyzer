@@ -257,6 +257,16 @@ TRANSLATIONS = {
         "lbl_training_prog": "Tréning folyamat:",
         "chk_zoom_rodent": "Egérre zoomolt nézet",
         "chk_show_ai": "AI detektálás mutatása",
+        "lbl_annot_tool_title": "Kézi Pontozó:",
+        "chk_auto_advance": "Auto-léptetés",
+        "btn_clear_pts": "🗑 Pontok törlése",
+        "tt_clear_pts": "Minden kézi kulcspont törlése erről a mintáról [C / Del]",
+        "lbl_annot_hint_default": "[Kattints vagy húzd a pontot a képen! (0-4 eszközök, Z: Zoom, C: Törlés, Jobb-klikk: törlés)]",
+        "tool_pan": "✋ Pásztázás (0)",
+        "tool_forepaw": "🐾 Mellső mancs (1)",
+        "tool_hindpaw": "🐾 Hátsó mancs (2)",
+        "tool_nose": "🔴 Orr (3)",
+        "tool_tail": "🔵 Faroktő (4)",
         "status_harvesting": "Minták gyűjtése a videókból...",
         "status_ready": "Minták betöltve! Ellenőrizze a detektálásokat, majd indítsa a betanítást.",
         "status_training": "YOLOv8 egér detektor betanítása folyamatban...",
@@ -426,6 +436,16 @@ TRANSLATIONS = {
         "lbl_training_prog": "Training Progress:",
         "chk_zoom_rodent": "Focus on Rodent",
         "chk_show_ai": "Show AI Detection",
+        "lbl_annot_tool_title": "Manual Keypoint Tool:",
+        "chk_auto_advance": "Auto-advance",
+        "btn_clear_pts": "🗑 Clear Points",
+        "tt_clear_pts": "Clear all manual keypoints on this sample [C / Del]",
+        "lbl_annot_hint_default": "[Click or drag keypoint on image! (0-4: tools, Z: Zoom, C: Clear, Right-click: delete)]",
+        "tool_pan": "✋ Pan View (0)",
+        "tool_forepaw": "🐾 Forepaw (1)",
+        "tool_hindpaw": "🐾 Hindpaw (2)",
+        "tool_nose": "🔴 Snout (3)",
+        "tool_tail": "🔵 Tail Base (4)",
         "status_harvesting": "Harvesting frames from videos...",
         "status_ready": "Samples loaded! Inspect detections and click Start AI Training.",
         "status_training": "Fine-tuning YOLOv8 rodent detector...",
@@ -4468,11 +4488,12 @@ class PerVideoIDTrackerApp:
         annot_box.pack(fill="x", pady=(0, 6))
 
         tk.Label(
-            annot_box, text="🎯 " + self.tr("lbl_annot_tool_title", default="Kézi Pontozó:"),
+            annot_box, text="🎯 " + self.tr("lbl_annot_tool_title"),
             bg=P["bg_card"], fg=P["cyan"], font=(self.ui_font, 9, "bold")
         ).pack(side="left", padx=(2, 6))
 
         var_annot_tool = tk.StringVar(value="pan")
+        var_auto_advance = tk.BooleanVar(value=True)
         tool_btns = {}
         current_transform = {}
 
@@ -4480,9 +4501,9 @@ class PerVideoIDTrackerApp:
             curr = var_annot_tool.get()
             for key, btn in tool_btns.items():
                 if key == curr:
-                    btn.config(relief="sunken", bg=P["bg_panel"])
+                    btn.config(relief="solid", bd=2, bg=P["bg_panel"])
                 else:
-                    btn.config(relief="flat", bg=P["bg_main"])
+                    btn.config(relief="flat", bd=1, bg=P["bg_main"])
             if curr == "pan":
                 canvas_view.config(cursor="fleur")
             else:
@@ -4493,11 +4514,11 @@ class PerVideoIDTrackerApp:
             _update_tool_buttons()
 
         tools_data = [
-            ("pan", "✋ Pásztázás (0)", P["text_muted"]),
-            ("fore_paw_pt", "🐾 Mellső mancs (1)", P["emerald"]),
-            ("hind_paw_pt", "🐾 Hátsó mancs (2)", "#C084FC"),
-            ("nose_pt", "🔴 Orr (3)", P["danger"]),
-            ("tail_base", "🔵 Faroktő (4)", P["cyan"]),
+            ("pan", self.tr("tool_pan"), P["text_muted"]),
+            ("fore_paw_pt", self.tr("tool_forepaw"), P["emerald"]),
+            ("hind_paw_pt", self.tr("tool_hindpaw"), "#C084FC"),
+            ("nose_pt", self.tr("tool_nose"), P["danger"]),
+            ("tail_base", self.tr("tool_tail"), P["cyan"]),
         ]
 
         for t_key, t_txt, t_fg in tools_data:
@@ -4510,8 +4531,25 @@ class PerVideoIDTrackerApp:
             b.pack(side="left", padx=2)
             tool_btns[t_key] = b
 
+        chk_advance = tk.Checkbutton(
+            annot_box, text=self.tr("chk_auto_advance"), variable=var_auto_advance,
+            bg=P["bg_card"], fg=P["text_main"], selectcolor=P["bg_main"],
+            activebackground=P["bg_card"], activeforeground=P["cyan"],
+            font=(self.ui_font, 8)
+        )
+        chk_advance.pack(side="left", padx=(8, 2))
+
+        btn_clear_pts = tk.Button(
+            annot_box, text=self.tr("btn_clear_pts"), font=(self.ui_font, 8),
+            bg=P["bg_panel"], fg=P["danger"], activebackground=P["bg_main"],
+            activeforeground=P["danger"], padx=5, pady=2, bd=1,
+            command=lambda: _clear_current_sample_points()
+        )
+        btn_clear_pts.pack(side="left", padx=2)
+        ToolTip(btn_clear_pts, lambda: self.tr("tt_clear_pts"))
+
         lbl_annot_hint = tk.Label(
-            annot_box, text="[Kattints a mintára a mancs bejelöléséhez!]",
+            annot_box, text=self.tr("lbl_annot_hint_default"),
             bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 8)
         )
         lbl_annot_hint.pack(side="right", padx=(4, 2))
@@ -5013,21 +5051,18 @@ class PerVideoIDTrackerApp:
             view_state["zoom"] = float(np.clip(view_state["zoom"] * factor, 1.0, 8.0))
             _render_current_sample()
 
-        def _on_drag_start(event):
-            view_state["drag_start"] = (event.x, event.y)
-
         def _canvas_to_crop(canvas_x, canvas_y):
-            if not current_transform or "tw" not in current_transform:
+            if not current_transform or "scale" not in current_transform:
                 return None
-            tw = current_transform["tw"]
-            th = current_transform["th"]
+            scale = current_transform["scale"]
             ox = current_transform["offset_x"]
             oy = current_transform["offset_y"]
             rx = canvas_x - ox
             ry = canvas_y - oy
+            tw = current_transform["tw"]
+            th = current_transform["th"]
             if rx < 0 or rx >= tw or ry < 0 or ry >= th:
                 return None
-            scale = current_transform["scale"]
             sub_x = rx / scale
             sub_y = ry / scale
             disp_x = current_transform["disp_x1"] + sub_x
@@ -5038,50 +5073,183 @@ class PerVideoIDTrackerApp:
             crop_y = int(np.clip(crop_y, 0, current_transform["ch_img"] - 1))
             return (crop_x, crop_y)
 
-        def _on_canvas_click(event):
-            tool = var_annot_tool.get()
-            if tool == "pan":
-                _on_drag_start(event)
-                return
+        def _crop_to_canvas(crop_x, crop_y):
+            if not current_transform or "scale" not in current_transform:
+                return None
+            disp_x = crop_x - current_transform["c_x1"]
+            disp_y = crop_y - current_transform["c_y1"]
+            sub_x = disp_x - current_transform["disp_x1"]
+            sub_y = disp_y - current_transform["disp_y1"]
+            scale = current_transform["scale"]
+            canvas_x = int(current_transform["offset_x"] + sub_x * scale)
+            canvas_y = int(current_transform["offset_y"] + sub_y * scale)
+            return (canvas_x, canvas_y)
+
+        def _find_closest_keypoint(canvas_x, canvas_y, max_dist=18):
+            if not samples_list or current_idx[0] < 0 or current_idx[0] >= len(samples_list):
+                return None, None
+            sample = samples_list[current_idx[0]]
+            anat = sample.get("anatomy")
+            if not anat or not isinstance(anat, dict):
+                return None, None
+            best_k = None
+            best_d = max_dist
+            for k in ("fore_paw_pt", "hind_paw_pt", "nose_pt", "tail_base"):
+                pt = anat.get(k)
+                if pt:
+                    cpt = _crop_to_canvas(pt[0], pt[1])
+                    if cpt:
+                        d = float(np.hypot(canvas_x - cpt[0], canvas_y - cpt[1]))
+                        if d < best_d:
+                            best_d = d
+                            best_k = k
+            return best_k, best_d
+
+        def _clear_current_sample_points(event=None):
             if not samples_list or current_idx[0] < 0 or current_idx[0] >= len(samples_list):
                 return
-            pt = _canvas_to_crop(event.x, event.y)
-            if pt is None:
+            sample = samples_list[current_idx[0]]
+            if "anatomy" in sample and isinstance(sample["anatomy"], dict):
+                for k in ("fore_paw_pt", "hind_paw_pt", "nose_pt", "tail_base"):
+                    sample["anatomy"].pop(k, None)
+                    sample["anatomy"].pop(f"{k}_manual", None)
+            txt_log.insert("end", "🗑 Minden kézi kulcspont törölve az aktuális mintáról!\n")
+            txt_log.see("end")
+            _render_current_sample()
+
+        drag_state = {
+            "mode": None,          # 'point' or 'pan'
+            "target_kpt": None,
+            "placed_new": False,
+            "pan_start": None,
+        }
+
+        names = {
+            "fore_paw_pt": "🐾 Mellső mancs",
+            "hind_paw_pt": "🐾 Hátsó mancs",
+            "nose_pt": "🔴 Orr",
+            "tail_base": "🔵 Faroktő"
+        }
+
+        def _on_canvas_press(event):
+            if not samples_list or current_idx[0] < 0 or current_idx[0] >= len(samples_list):
                 return
             sample = samples_list[current_idx[0]]
             if "anatomy" not in sample or not isinstance(sample["anatomy"], dict):
                 sample["anatomy"] = {}
-            sample["anatomy"][tool] = pt
-            sample["anatomy"][f"{tool}_manual"] = True
+
+            # 1. Grab closest existing keypoint if within click tolerance
+            k_near, _ = _find_closest_keypoint(event.x, event.y, max_dist=16)
+            if k_near:
+                drag_state["mode"] = "point"
+                drag_state["target_kpt"] = k_near
+                drag_state["placed_new"] = False
+                _set_tool(k_near)
+                canvas_view.config(cursor="hand2")
+                lbl_annot_hint.config(text=f"[Húzás: {names.get(k_near, k_near)} mozgatása]")
+                return
+
+            # 2. Pan tool
+            curr_tool = var_annot_tool.get()
+            if curr_tool == "pan":
+                drag_state["mode"] = "pan"
+                drag_state["target_kpt"] = None
+                drag_state["pan_start"] = (event.x, event.y)
+                canvas_view.config(cursor="fleur")
+                return
+
+            # 3. Place new / reposition active tool keypoint
+            pt = _canvas_to_crop(event.x, event.y)
+            if pt is None:
+                return
+
+            sample["anatomy"][curr_tool] = pt
+            sample["anatomy"][f"{curr_tool}_manual"] = True
             sample["excluded"] = False
-
-            names = {
-                "fore_paw_pt": "🐾 Mellső mancs",
-                "hind_paw_pt": "🐾 Hátsó mancs",
-                "nose_pt": "🔴 Orr",
-                "tail_base": "🔵 Faroktő"
-            }
-            lbl_name = names.get(tool, tool)
-            txt_log.insert("end", f"🎯 Kézi jelölés: {lbl_name} rögzítve ({pt[0]}, {pt[1]})!\n")
-            txt_log.see("end")
-
-            # Automatikus léptetés a következő testrészre:
-            if tool == "fore_paw_pt":
-                _set_tool("hind_paw_pt")
-            elif tool == "hind_paw_pt":
-                _set_tool("nose_pt")
-            elif tool == "nose_pt":
-                _set_tool("tail_base")
-
+            drag_state["mode"] = "point"
+            drag_state["target_kpt"] = curr_tool
+            drag_state["placed_new"] = True
+            canvas_view.config(cursor="hand2")
             _render_current_sample()
 
-        def _on_drag_motion(event):
-            if var_annot_tool.get() == "pan" and view_state["drag_start"] and view_state["zoom"] > 1.0:
-                dx = event.x - view_state["drag_start"][0]
-                dy = event.y - view_state["drag_start"][1]
-                view_state["drag_start"] = (event.x, event.y)
+        def _on_canvas_motion(event):
+            # Mouse drag in progress
+            if drag_state["mode"] == "point" and drag_state["target_kpt"]:
+                pt = _canvas_to_crop(event.x, event.y)
+                if pt is not None and current_idx[0] < len(samples_list):
+                    sample = samples_list[current_idx[0]]
+                    k = drag_state["target_kpt"]
+                    sample["anatomy"][k] = pt
+                    sample["anatomy"][f"{k}_manual"] = True
+                    _render_current_sample()
+                return
+
+            if drag_state["mode"] == "pan" and drag_state["pan_start"] and view_state["zoom"] > 1.01:
+                dx = event.x - drag_state["pan_start"][0]
+                dy = event.y - drag_state["pan_start"][1]
+                drag_state["pan_start"] = (event.x, event.y)
                 view_state["pan_x"] -= dx
                 view_state["pan_y"] -= dy
+                _render_current_sample()
+                return
+
+            # Hover motion without click
+            k_near, _ = _find_closest_keypoint(event.x, event.y, max_dist=16)
+            if k_near:
+                canvas_view.config(cursor="hand2")
+                lbl_annot_hint.config(text=f"[Kattints és húzd a pontot: {names.get(k_near, k_near)}!]")
+            else:
+                curr_tool = var_annot_tool.get()
+                if curr_tool == "pan":
+                    canvas_view.config(cursor="fleur")
+                    lbl_annot_hint.config(text=self.tr("lbl_annot_hint_default"))
+                else:
+                    canvas_view.config(cursor="crosshair")
+                    lbl_annot_hint.config(text=f"[Kattints vagy húzz: {names.get(curr_tool, curr_tool)}]")
+
+        def _on_canvas_release(event):
+            if drag_state["mode"] == "point" and drag_state["target_kpt"]:
+                k = drag_state["target_kpt"]
+                sample = samples_list[current_idx[0]]
+                pt = sample["anatomy"].get(k)
+                if pt:
+                    lbl_name = names.get(k, k)
+                    action_txt = "rögzítve" if drag_state["placed_new"] else "áthelyezve"
+                    txt_log.insert("end", f"🎯 Kézi jelölés: {lbl_name} {action_txt} ({pt[0]}, {pt[1]})!\n")
+                    txt_log.see("end")
+
+                # Auto-advance if enabled and a new point was placed
+                if drag_state["placed_new"] and var_auto_advance.get():
+                    if k == "fore_paw_pt":
+                        _set_tool("hind_paw_pt")
+                    elif k == "hind_paw_pt":
+                        _set_tool("nose_pt")
+                    elif k == "nose_pt":
+                        _set_tool("tail_base")
+                    elif k == "tail_base":
+                        _set_tool("pan")
+
+            drag_state["mode"] = None
+            drag_state["target_kpt"] = None
+            drag_state["placed_new"] = False
+            drag_state["pan_start"] = None
+            _update_tool_buttons()
+            _render_current_sample()
+
+        def _on_canvas_right_click(event):
+            if not samples_list or current_idx[0] < 0 or current_idx[0] >= len(samples_list):
+                return
+            sample = samples_list[current_idx[0]]
+            anat = sample.get("anatomy")
+            if not anat or not isinstance(anat, dict):
+                return
+            k_near, _ = _find_closest_keypoint(event.x, event.y, max_dist=20)
+            target = k_near if k_near else (var_annot_tool.get() if var_annot_tool.get() in anat else None)
+            if target and target in anat:
+                anat.pop(target, None)
+                anat.pop(f"{target}_manual", None)
+                txt_log.insert("end", f"🗑 Pont eltávolítva: {names.get(target, target)}\n")
+                txt_log.see("end")
                 _render_current_sample()
 
         btn_prev.config(command=_prev_sample)
@@ -5099,14 +5267,28 @@ class PerVideoIDTrackerApp:
         canvas_view.bind("<MouseWheel>", _on_wheel)
         canvas_view.bind("<Button-4>", _on_wheel)
         canvas_view.bind("<Button-5>", _on_wheel)
-        canvas_view.bind("<ButtonPress-1>", _on_canvas_click)
-        canvas_view.bind("<B1-Motion>", _on_drag_motion)
+        canvas_view.bind("<ButtonPress-1>", _on_canvas_press)
+        canvas_view.bind("<B1-Motion>", _on_canvas_motion)
+        canvas_view.bind("<ButtonRelease-1>", _on_canvas_release)
+        canvas_view.bind("<Motion>", _on_canvas_motion)
+        canvas_view.bind("<ButtonPress-2>", _on_canvas_right_click)
+        canvas_view.bind("<ButtonPress-3>", _on_canvas_right_click)
         canvas_view.bind("<Configure>", lambda e: _render_current_sample())
 
         preview_win.bind("<Left>", _prev_sample)
         preview_win.bind("<Right>", _next_sample)
+        preview_win.bind("<a>", _prev_sample)
+        preview_win.bind("<A>", _prev_sample)
+        preview_win.bind("<d>", _next_sample)
+        preview_win.bind("<D>", _next_sample)
         preview_win.bind("<space>", _toggle_exclude)
         preview_win.bind("<x>", _toggle_exclude)
+        preview_win.bind("<c>", _clear_current_sample_points)
+        preview_win.bind("<C>", _clear_current_sample_points)
+        preview_win.bind("<Delete>", _clear_current_sample_points)
+        preview_win.bind("<BackSpace>", _clear_current_sample_points)
+        preview_win.bind("<z>", lambda e: (var_zoom_rodent.set(not var_zoom_rodent.get()), _render_current_sample()))
+        preview_win.bind("<Z>", lambda e: (var_zoom_rodent.set(not var_zoom_rodent.get()), _render_current_sample()))
         preview_win.bind("<Escape>", lambda e: preview_win.destroy())
 
         for k in ("0", "<p>", "<P>"):
@@ -5117,7 +5299,7 @@ class PerVideoIDTrackerApp:
             preview_win.bind(k, lambda e: _set_tool("hind_paw_pt"))
         for k in ("3", "<o>", "<O>"):
             preview_win.bind(k, lambda e: _set_tool("nose_pt"))
-        for k in ("4", "<t>", "<T>"):
+        for k in ("4", "<t>", "<T>", "<f>", "<F>"):
             preview_win.bind(k, lambda e: _set_tool("tail_base"))
 
         def _on_window_close():
