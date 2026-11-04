@@ -135,17 +135,21 @@ def _get_torch():
 # RESOURCE PATH & NATIVE OS BRANDING
 # ==============================================================================
 def get_resource_path(relative_path):
-    """Finds bundled resources (icon.ico, icon.icns, .pt models) in dev, cwd, and PyInstaller builds."""
+    """Finds bundled resources (icon.ico, icon.icns, .pt models) in dev, assets/, cwd, and PyInstaller builds."""
     search_dirs = []
     if hasattr(sys, "_MEIPASS"):
         search_dirs.append(sys._MEIPASS)
-    search_dirs.append(os.path.dirname(os.path.abspath(__file__)))
+        search_dirs.append(os.path.join(sys._MEIPASS, "assets"))
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    search_dirs.append(script_dir)
+    search_dirs.append(os.path.join(script_dir, "assets"))
     search_dirs.append(os.getcwd())
+    search_dirs.append(os.path.join(os.getcwd(), "assets"))
     for base_path in search_dirs:
         candidate = os.path.join(base_path, relative_path)
         if os.path.exists(candidate):
             return candidate
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
+    return os.path.join(script_dir, "assets", relative_path)
 
 
 def configure_native_os_identity():
@@ -4292,7 +4296,7 @@ class PerVideoIDTrackerApp:
         var_zoom_rodent = tk.BooleanVar(value=True)
         var_show_ai = tk.BooleanVar(value=True)
 
-        btn_prev = ttk.Button(nav_row1, text=self.tr("btn_prev_sample"), style="Ghost.TButton")
+        btn_prev = ttk.Button(nav_row1, text=self.tr("btn_prev_sample"), style="Ghost.TButton", takefocus=False)
         btn_prev.pack(side="left", padx=(0, 4))
 
         lbl_counter = tk.Label(
@@ -4301,17 +4305,17 @@ class PerVideoIDTrackerApp:
         )
         lbl_counter.pack(side="left", padx=4)
 
-        btn_next = ttk.Button(nav_row1, text=self.tr("btn_next_sample"), style="Ghost.TButton")
+        btn_next = ttk.Button(nav_row1, text=self.tr("btn_next_sample"), style="Ghost.TButton", takefocus=False)
         btn_next.pack(side="left", padx=(0, 8))
 
-        btn_exclude = ttk.Button(nav_row1, text=self.tr("btn_exclude_sample"), style="Ghost.TButton")
+        btn_exclude = ttk.Button(nav_row1, text=self.tr("btn_exclude_sample"), style="Ghost.TButton", takefocus=False)
         btn_exclude.pack(side="left", padx=(0, 8))
 
-        btn_auto_clean = ttk.Button(nav_row1, text=self.tr("btn_auto_clean"), style="Ghost.TButton")
+        btn_auto_clean = ttk.Button(nav_row1, text=self.tr("btn_auto_clean"), style="Ghost.TButton", takefocus=False)
         btn_auto_clean.pack(side="left", padx=(0, 8))
         ToolTip(btn_auto_clean, lambda: self.tr("tt_auto_clean"))
 
-        btn_rescan = ttk.Button(nav_row1, text=self.tr("btn_rescan_samples"), style="Ghost.TButton")
+        btn_rescan = ttk.Button(nav_row1, text=self.tr("btn_rescan_samples"), style="Ghost.TButton", takefocus=False)
         btn_rescan.pack(side="right")
         ToolTip(btn_rescan, lambda: self.tr("tt_rescan_samples"))
 
@@ -4724,7 +4728,7 @@ class PerVideoIDTrackerApp:
         def _set_controls_busy(busy):
             is_busy[0] = bool(busy)
             st = "disabled" if busy else "normal"
-            for w in (btn_train, btn_rescan, btn_test, btn_exclude, btn_auto_clean):
+            for w in (btn_train, btn_rescan, btn_test):
                 if w.winfo_exists():
                     w.config(state=st)
 
@@ -4905,8 +4909,6 @@ class PerVideoIDTrackerApp:
                 _render_current_sample()
 
         def _toggle_exclude(event=None):
-            if is_busy[0]:
-                return
             if samples_list and 0 <= current_idx[0] < len(samples_list):
                 s = samples_list[current_idx[0]]
                 s["excluded"] = not s.get("excluded", False)
@@ -4914,10 +4916,9 @@ class PerVideoIDTrackerApp:
                     s["ai_pred_bbox"] = None
                     s["ai_pred_pose"] = None
                 _render_current_sample()
+            return "break"
 
         def _auto_clean_samples():
-            if is_busy[0]:
-                return
             changed = 0
             for s in samples_list:
                 # If quality < 65 or aspect < 1.35 or area < 4500
@@ -5177,6 +5178,10 @@ class PerVideoIDTrackerApp:
         preview_win.bind("<D>", _next_sample)
         preview_win.bind("<space>", _toggle_exclude)
         preview_win.bind("<x>", _toggle_exclude)
+        preview_win.bind("<X>", _toggle_exclude)
+        canvas_view.bind("<space>", _toggle_exclude)
+        canvas_view.bind("<x>", _toggle_exclude)
+        canvas_view.bind("<X>", _toggle_exclude)
         preview_win.bind("<c>", _clear_current_sample_points)
         preview_win.bind("<C>", _clear_current_sample_points)
         preview_win.bind("<Delete>", _clear_current_sample_points)

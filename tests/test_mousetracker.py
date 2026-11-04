@@ -148,6 +148,11 @@ class TestUnicodeImageIOAndCompression(unittest.TestCase):
         self.assertEqual(dec_f.shape, frame.shape)
         np.testing.assert_array_equal(dec_m, mask)
 
+    def test_get_resource_path_finds_assets(self):
+        for asset_name in ("icon.ico", "icon.icns", "mouse_pose_ai.pt"):
+            resolved = mt.get_resource_path(asset_name)
+            self.assertTrue(os.path.exists(resolved), f"Asset not found via get_resource_path: {asset_name} -> {resolved}")
+
 
 class TestAnatomicalClassificationAndDipDetection(unittest.TestCase):
     """Tests rodent anatomical classification, IoU, CSV sanitization, and thread pose isolation."""

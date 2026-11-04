@@ -35,8 +35,8 @@ jobs:
       - name: Verify Required Assets Exist
         shell: pwsh
         run: |
-          if (-not (Test-Path "icon.ico")) {
-            Write-Error "HIÁNYZIK az icon.ico a repo gyökeréből!"
+          if (-not (Test-Path "assets/icon.ico")) {
+            Write-Error "HIÁNYZIK az assets/icon.ico!"
             exit 1
           }
 
@@ -51,14 +51,10 @@ jobs:
         run: |
           pyinstaller --noconfirm --clean --windowed --onefile `
             --name "MouseAnalyzer_PRO" `
-            --icon "icon.ico" `
-            --add-data "icon.ico;." `
-            --add-data "icon.icns;." `
-            --add-data "eger_kalibracio_profil.json;." `
-            --add-data "mouse_pose_ai.pt;." `
-            --add-data "rodent_detector.pt;." `
-            --add-data "yolov8n-pose.pt;." `
-            --add-data "yolov8n.pt;." `
+            --icon "assets/icon.ico" `
+            --add-data "assets/icon.ico;assets" `
+            --add-data "assets/icon.icns;assets" `
+            --add-data "assets/mouse_pose_ai.pt;assets" `
             --collect-all cv2 `
             --collect-all ultralytics `
             --collect-all torchvision `
@@ -94,8 +90,8 @@ jobs:
 
       - name: Verify macOS Icons Exist
         run: |
-          if [ ! -f "icon.icns" ]; then
-            echo "HIÁNYZIK az icon.icns a repo gyökeréből!"
+          if [ ! -f "assets/icon.icns" ]; then
+            echo "HIÁNYZIK az assets/icon.icns!"
             exit 1
           fi
 
@@ -108,15 +104,11 @@ jobs:
         run: |
           pyinstaller --noconfirm --clean --windowed \
             --name "MouseAnalyzer PRO" \
-            --icon "icon.icns" \
+            --icon "assets/icon.icns" \
             --osx-bundle-identifier "com.zalma.mouseanalyzer.pro" \
-            --add-data "icon.icns:." \
-            --add-data "icon.ico:." \
-            --add-data "eger_kalibracio_profil.json:." \
-            --add-data "mouse_pose_ai.pt:." \
-            --add-data "rodent_detector.pt:." \
-            --add-data "yolov8n-pose.pt:." \
-            --add-data "yolov8n.pt:." \
+            --add-data "assets/icon.icns:assets" \
+            --add-data "assets/icon.ico:assets" \
+            --add-data "assets/mouse_pose_ai.pt:assets" \
             --collect-all cv2 \
             --collect-all ultralytics \
             --collect-all torchvision \

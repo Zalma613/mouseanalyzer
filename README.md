@@ -1,57 +1,79 @@
-# 🐁 Mouse Tracking PROMAX + DeepLabCut Addon
+# 🐁 MouseAnalyzer PRO (v3.6)
 
-A high-performance, multi-threaded desktop application with a Graphical User Interface (GUI) for automated behavioral tracking and kinematic analysis of rodents in staircase/ladder testing environments. This software combines optimized OpenCV video processing with optional **DeepLabCut (SuperAnimal-Quadruped)** AI-powered anatomical keypoint estimation.
+A high-performance, multi-threaded scientific desktop workstation for automated horizontal ladder behavioral tracking, foot-fault (*paw slip*) classification, and kinematic analysis of rodents. Combines sub-pixel OpenCV morphological segmentation, Kalman & elastic ladder-sag tracking, and a specialized **9-Keypoint Rodent Pose AI (`mouse_pose_ai.pt`)**.
 
 ---
 
 ## ✨ Key Features
 
-* **🚀 Hardware Acceleration & Async Prefetch:** OpenCV OpenCL (GPU) support, hardware-accelerated video decoding, and background prefetch threading for maximum performance.
-* **🎯 Precise Event Tracking:** 
-  * Automatic Start and Goal gate detection with zone splitting (Start / Center / Goal).
-  * Detection of true nose and paw dips (*foot faults*) with refractory periods and minimum distance filtering.
-  * Freezing events and movement duration tracking.
-* **🧠 DeepLabCut & AI Keypoint Analysis (Addon):**
-  * Optional *SuperAnimal-Quadruped* integration to automatically classify nose exploration, paw slips, and tail/hindlimb events.
-  * Active Learning module for automated training dataset exportation.
-* **🦴 Anatomical OpenCV Dip Gating & Direction Locking:**
-  * Strict Left-to-Right behavioral protocol lock: Snout (+X) and tail (-X) orientations are invariant to micro-hesitations or tail curling, completely eliminating 180° anatomical axis inversion.
-  * Robust Rodent Mass Gating ($\ge 2,000$ px entry gate, $\ge 1,200$ px contour selection) completely eliminates "invisible mouse" phantom runs triggered by screws, Perspex reflections, or investigator handling.
-  * Automated 3-Run Protocol Lifecycle (`WAIT_FOR_RUN_1` $\to$ `RUNNING_1` $\to$ `WAIT_FOR_RUN_2` $\to$ `RUNNING_2` $\to$ `WAIT_FOR_RUN_3` $\to$ `RUNNING_3` $\to$ `SESSION_COMPLETED`), cleanly ending tracking after target runs.
-* **⚡ 1-Click Rodent AI Detector & Trainer (YOLOv8):**
-  * One-click self-supervised dataset harvester & fine-tuner built directly into the GUI (`🐭 Betanítás Saját Videókból`).
-  * Automatically crops high-confidence rodent samples from loaded videos, synthesizes YOLO bounding box labels, and trains a specialized `rodent_detector.pt` model in $<60$ seconds.
-  * Real-time dual-engine inference (`ParallelYoloOpenCVEngine`) combining deep-learning bounding box acceleration with sub-pixel morphological segmentation.
-* **📊 Detailed Visualization & Export:**
-  * Interactive review window with quick keyboard shortcuts (e.g., `[T]` to switch body parts, `[SPACE]` to toggle valid status).
-  * Dynamic 2D Heatmaps with colorblind-accessible velocity-graded trajectory color-coding.
-  * Comprehensive individual and summary CSV reports (with precise timestamps, speeds, and error classifications).
-  * JSON-based calibration profile management.
-* **⌨️ Fast Ergonomic Keyboard Workflow:**
-  * Press **`Enter`** (or `F2` / double-click) on any queue row to edit the **Subject ID** inline directly inside the table.
-  * Pressing **`Enter`** in the cell immediately commits the ID and auto-advances selection to the next video for rapid batch renaming.
-  * Pressing **`Escape`** cancels editing.
+* **🚀 Hardware Acceleration & Async Prefetch:**
+  * Automatic compute device detection supporting **Apple Silicon Metal (MPS)**, **NVIDIA CUDA**, and **OpenCL (UMat)** alongside multi-threaded `AsyncVideoReader` frame prefetching.
+* **🦴 9-Keypoint Rodent Pose AI & Anatomical Dip Classification:**
+  * Real-time dual-engine inference (`ParallelYoloOpenCVEngine`) combining custom 9-keypoint pose estimation (*Snout, Head, Shoulder, Forepaw, Spine, Hip, Hindpaw, Tail Base, Tail Tip*) with sub-pixel morphological segmentation and pink-skin chromaticity scoring.
+  * Automatically distinguishes **Forepaw faults**, **Hindpaw faults**, **Snout explorations**, and **Tail dips**, while categorizing slips into minor slips vs. deep falls.
+  * Optional **DeepLabCut (*SuperAnimal-Quadruped*)** addon integration and Active Learning training dataset export.
+* **🎯 Robust Protocol & Gate Lifecycle:**
+  * Automatic adaptive ladder ROI, rung keypoint, and Start/Goal gate calibration (`AutoAdaptiveLadderEngine`).
+  * Multi-run protocol state machine (`WAIT_FOR_RUN_1` $\to$ `RUNNING_1` $\to \dots \to$ `SESSION_COMPLETED`) with optional Left-to-Right heading lock or bidirectional tracking.
+  * Tracks transit time, net moving time, freezing intervals, micro-hesitations, velocity CV, jerk score, postural sway, and composite uncertainty index (%).
+* **🧠 Interactive AI Training & Preview Studio:**
+  * Built-in dataset harvester & interactive keypoint annotator (`🧠 AI Training & Preview`) to inspect candidate frames, drag/place manual paw/snout/tail keypoints, exclude blurred frames, and fine-tune `mouse_pose_ai.pt` in-process.
+* **🔍 Interactive Event Inspector & Colorblind-Safe Exports:**
+  * Post-analysis review workstation with zoom/pan, 1-click body-part reclassification (`[1]` Forepaw, `[2]` Hindpaw, `[3]` Snout, `[4]` Tail), `Shift+Click` point relocation, and `[Space]` validity toggling.
+  * Generates colorblind-accessible (Magenta $\to$ Amber $\to$ Cyan) velocity-graded trajectory heatmaps and formula-sanitized individual & master CSV reports (`Minden_Egyed_Meresi_Adatai.csv`).
+* **🌐 Cloud & Teams Video Support:**
+  * Supports local video files (`.mp4`, `.avi`, `.mov`, `.mkv`), synced Microsoft Teams / OneDrive Files On-Demand placeholders, and direct cloud video URLs with SSRF & size-cap protection.
+
+---
+
+## 📁 Repository Structure
+
+```text
+├── .github/workflows/build.yml   # Automated CI test suite & Windows/macOS release builder
+├── assets/
+│   ├── icon.icns                 # macOS application bundle icon
+│   ├── icon.ico                  # Windows executable & window icon
+│   └── mouse_pose_ai.pt          # Pre-trained 9-keypoint Rodent Pose YOLOv8 model
+├── tests/
+│   └── test_mousetracker.py      # Automated unit & security test suite
+├── LICENSE                       # MIT License
+├── MouseTracker.py               # Main application source
+└── README.md                     # Documentation
+```
 
 ---
 
 ## 💾 Installation & Standalone Binaries
 
-If you are using the pre-compiled standalone version (`.exe` for Windows or `.dmg` for macOS):
+Pre-compiled standalone releases (`.exe` for Windows and `.dmg` for macOS) are built automatically on version tags via GitHub Actions:
 
 ### Windows (`.exe`)
-1. Download the latest `MouseTracker.exe` release.
-2. Simply double-click the executable to launch the application. *(No Python installation required!)*
+1. Download `MouseAnalyzer_PRO.exe` from the latest GitHub Release.
+2. Double-click to launch *(no Python installation required)*.
 
 ### macOS (`.dmg`)
-1. Download the `MouseTracker.dmg` file.
-2. Open the disk image and drag the application into your **Applications** folder.
-3. *Note for macOS users:* If Gatekeeper blocks the app upon first launch, right-click (or control-click) the app icon, select **Open**, and confirm.
+1. Download `MouseAnalyzer_PRO_macOS.dmg` from the latest GitHub Release.
+2. Open the disk image and drag **MouseAnalyzer PRO** into your **Applications** folder.
+3. *Note:* If macOS Gatekeeper prompts on first launch, right-click (or Control-click) the app icon and select **Open**.
 
 ---
 
-## 🛠️ Requirements (For Running from Python Source)
+## 🛠️ Running from Source & Tests
 
-If you prefer running the raw script (`MouseTracker.py`), ensure you have Python installed along with the required libraries:
+Ensure Python 3.10+ is installed, then install the dependencies:
+
 ```bash
 pip install opencv-python numpy numba ultralytics torch torchvision pillow yt-dlp
+```
+
+Launch the workstation:
+
+```bash
+python MouseTracker.py
+```
+
+Run the automated unit and security test suite:
+
+```bash
+python -m unittest discover -s tests -v
 ```
