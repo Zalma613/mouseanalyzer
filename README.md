@@ -24,9 +24,9 @@ A high-performance, multi-threaded desktop application with a Graphical User Int
   * Real-time dual-engine inference (`ParallelYoloOpenCVEngine`) combining deep-learning bounding box acceleration with sub-pixel morphological segmentation.
 * **📊 Detailed Visualization & Export:**
   * Interactive review window with quick keyboard shortcuts (e.g., `[T]` to switch body parts, `[SPACE]` to toggle valid status).
-  * Dynamic 2D Heatmaps with velocity-graded trajectory color-coding.
-  * Comprehensive individual and summary CSV reports (with precise timestamps, speeds, and error classifications)[cite: 2].
-  * JSON-based calibration profile management[cite: 2].
+  * Dynamic 2D Heatmaps with colorblind-accessible velocity-graded trajectory color-coding.
+  * Comprehensive individual and summary CSV reports (with precise timestamps, speeds, and error classifications).
+  * JSON-based calibration profile management.
 * **⌨️ Fast Ergonomic Keyboard Workflow:**
   * Press **`Enter`** (or `F2` / double-click) on any queue row to edit the **Subject ID** inline directly inside the table.
   * Pressing **`Enter`** in the cell immediately commits the ID and auto-advances selection to the next video for rapid batch renaming.
@@ -53,4 +53,5 @@ If you are using the pre-compiled standalone version (`.exe` for Windows or `.dm
 
 If you prefer running the raw script (`MouseTracker.py`), ensure you have Python installed along with the required libraries:
 ```bash
-pip install opencv-python numpy pandas tables
+pip install opencv-python numpy numba ultralytics torch torchvision pillow yt-dlp
+```

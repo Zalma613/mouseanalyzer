@@ -10,6 +10,7 @@ import logging
 import tempfile
 import subprocess
 import threading
+import importlib.util
 from concurrent.futures import ThreadPoolExecutor
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, scrolledtext
@@ -469,13 +470,13 @@ TRANSLATIONS = {
         "tt_load_prof": "Mentett kalibrációs profil (.json) betöltése a lemezről.",
         "tt_save_prof": "Jelenlegi beállítások mentése JSON profilként.",
         "tt_rescan_samples": "Videók újbóli átvizsgálása és minták kigyűjtése a beállítások alapján.",
-        "calib_win_title": "Kalibrációs Előnézet (Görgő=Zoom, Jobb gomb=Mozgatás, Bal gomb=Kapu, ENTER=Indítás)",
-        "calib_tb_frame": "Képkocka",
-        "calib_tb_dark": "Fényerő Küszöb",
-        "calib_tb_diff": "Mozgás Küszöb",
-        "calib_tb_ladder": "Létra Maszk",
+        "calib_win_title": "Kalibracios Elonezet (Gorgo=Zoom, Jobb gomb=Mozgatas, Bal gomb=Kapu, ENTER=Inditas)",
+        "calib_tb_frame": "Kepkocka",
+        "calib_tb_dark": "Fenyero Kuszob",
+        "calib_tb_diff": "Mozgas Kuszob",
+        "calib_tb_ladder": "Letra Maszk",
         "calib_tb_fault": "Hibavonal %",
-        "calib_overlay_hint": "ZÖLD KAPU=Start | PIROS KAPU=Cél | PIROS VONAL=Hibavonal | ENTER=Indítás | R=Alaphelyzet",
+        "calib_overlay_hint": "ZOLD KAPU=Start | PIROS KAPU=Cel | PIROS VONAL=Hibavonal | ENTER=Inditas | R=Alaphelyzet",
         "tt_rev_prev": "Ugrás az előző detektált lábhibára / eseményre [A]",
         "tt_rev_next": "Ugrás a következő detektált lábhibára / eseményre [D]",
         "tt_rev_valid": "Esemény érvényességének váltása: ÉRVÉNYES ↔ KIZÁRVA [Szóköz]",
@@ -484,6 +485,36 @@ TRANSLATIONS = {
         "tt_rev_export": "Összes eredmény véglegesítése, kinematikai táblázatok és hőtérképek exportálása [Enter]",
         "tt_rev_zoom": "Nagyítás a hiba helyére (2.5×) [Z]",
         "tt_rev_reset": "Nagyítás és pozíció visszaállítása alaphelyzetbe (1.0×) [R]",
+        "url_dlg_title": "🌐 Teams / SharePoint / Web Videó Hozzáadása",
+        "url_dlg_prompt": "Videó URL (Direct MP4 / OneDrive / SharePoint / Google Drive):",
+        "url_dlg_local_btn": "📁 Helyi Teams / OneDrive mappa",
+        "url_dlg_add_btn": "＋ URL Hozzáadása (Enter)",
+        "url_dlg_file_title": "Válassz videót a szinkronizált Teams / OneDrive mappából",
+        "rev_quick_part_lbl": "Testrész javítás [1-kattintás]:",
+        "rev_fore_btn": "🐾 Mellső (1/M)",
+        "rev_hind_btn": "🐾 Hátsó (2/H)",
+        "rev_nose_btn": "🔴 Orr (3/O)",
+        "rev_tail_btn": "🔵 Farok (4/F)",
+        "tt_rev_fore": "Kijelölt esemény besorolása mellső lábhibának [1 / M]",
+        "tt_rev_hind": "Kijelölt esemény besorolása hátsó lábhibának [2 / H]",
+        "tt_rev_nose": "Kijelölt esemény besorolása orr-lenézésnek (exploráció) [3 / O]",
+        "tt_rev_tail": "Kijelölt esemény besorolása farok-billenésnek [4 / F]",
+        "rev_shift_hint": "💡 Shift+Kattintás a képen: Pont áthelyezése a mancsra",
+        "rev_save_train_btn": "🧠 Mentés Tanítóadatbázisba",
+        "rev_save_train_tt": "A felülvizsgált, pontosított hibaképek exportálása a tanítóadatbázisba (Active Learning)",
+        "msg_rev_exported": "✅ {n} képkocka sikeresen exportálva ide:\n{path}",
+        "train_searching_canvas": "🔍 Minták keresése a videókból folyamatban...",
+        "train_searching_status": "Minták keresése és kinyerése...",
+        "train_samples_ready_status": "{n} minta kész a betanításra!",
+        "train_no_samples_warn": "⚠ Nem található érvényes egérminta a videókban.",
+        "train_insufficient_samples": "Nincs elegendő minta a tréninghez.",
+        "train_min_samples_msg": "Legalább 6 aktív tanítóminta szükséges a betanításhoz!\n(Jelenleg: {act} aktív, {excl} kizárva)",
+        "train_preparing_status": "AI modell előkészítése és tréning...",
+        "train_no_model_msg": "Még nincs betanított AI modell. Indítsa el a tréninget!",
+        "train_testing_log": "🔍 Modell tesztelése: {name}...\n",
+        "train_test_done_log": "✔ Sikeresen detektálva {det} / {act} aktív mintán! ({omitted} kizárt minta mellőzve)\n",
+        "train_test_err_log": "❌ Hiba a tesztelés során: {err}\n",
+        "train_auto_clean_log": "🧹 {n} db alacsony minőségű/határeset minta automatikusan kizárva!\n",
     },
     "en": {
         "subtitle": "Professional Horizontal Ladder Kinematic & Behavioral Workstation",
@@ -663,6 +694,36 @@ TRANSLATIONS = {
         "tt_rev_export": "Confirm all events and export kinematic tables & heatmaps [Enter]",
         "tt_rev_zoom": "Zoom into slip location (2.5×) [Z]",
         "tt_rev_reset": "Reset zoom and position to fit overview (1.0×) [R]",
+        "url_dlg_title": "🌐 Add Teams / SharePoint / Web Video",
+        "url_dlg_prompt": "Video URL (Direct MP4 / OneDrive / SharePoint / Google Drive):",
+        "url_dlg_local_btn": "📁 Local Teams / OneDrive Folder",
+        "url_dlg_add_btn": "＋ Add URL (Enter)",
+        "url_dlg_file_title": "Select video from synced Teams / OneDrive folder",
+        "rev_quick_part_lbl": "Quick Body Part [1-click]:",
+        "rev_fore_btn": "🐾 Forepaw (1/M)",
+        "rev_hind_btn": "🐾 Hindpaw (2/H)",
+        "rev_nose_btn": "🔴 Snout (3/O)",
+        "rev_tail_btn": "🔵 Tail (4/F)",
+        "tt_rev_fore": "Classify selected event as Forepaw fault [1 / M]",
+        "tt_rev_hind": "Classify selected event as Hindpaw fault [2 / H]",
+        "tt_rev_nose": "Classify selected event as Snout exploration [3 / O]",
+        "tt_rev_tail": "Classify selected event as Tail dip [4 / F]",
+        "rev_shift_hint": "💡 Shift+Click on image: Relocate point to paw",
+        "rev_save_train_btn": "🧠 Save to Training DB",
+        "rev_save_train_tt": "Export verified and corrected slip frames to training dataset (Active Learning)",
+        "msg_rev_exported": "✅ {n} frames exported to:\n{path}",
+        "train_searching_canvas": "🔍 Scanning videos for rodent samples...",
+        "train_searching_status": "Searching and harvesting samples...",
+        "train_samples_ready_status": "{n} samples ready for training!",
+        "train_no_samples_warn": "⚠ No valid rodent samples found in queued videos.",
+        "train_insufficient_samples": "Insufficient samples for training.",
+        "train_min_samples_msg": "At least 6 active training samples are required!\n(Currently: {act} active, {excl} excluded)",
+        "train_preparing_status": "Preparing AI model and starting training...",
+        "train_no_model_msg": "No trained AI model found yet. Please run training first!",
+        "train_testing_log": "🔍 Testing model: {name}...\n",
+        "train_test_done_log": "✔ Detected on {det} / {act} active samples! ({omitted} excluded samples skipped)\n",
+        "train_test_err_log": "❌ Error during model testing: {err}\n",
+        "train_auto_clean_log": "🧹 {n} low-quality/borderline samples automatically excluded!\n",
     }
 }
 
@@ -868,6 +929,9 @@ class OpenCVZoomPanViewport:
 # ==============================================================================
 def save_image_unicode(path, img):
     try:
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         ext = os.path.splitext(path)[1] or ".jpg"
         is_success, im_buf_arr = cv2.imencode(ext, img)
         if is_success:
@@ -876,6 +940,16 @@ def save_image_unicode(path, img):
     except (OSError, cv2.error) as e:
         logger.debug("imwrite_unicode exception on %s: %s", path, e)
     return False
+
+
+def read_image_unicode(path, flags=cv2.IMREAD_COLOR):
+    try:
+        data = np.fromfile(path, dtype=np.uint8)
+        if data.size > 0:
+            return cv2.imdecode(data, flags)
+    except (OSError, cv2.error) as e:
+        logger.debug("imread_unicode exception on %s: %s", path, e)
+    return None
 
 
 def encode_frame_compressed(img, quality=94):
@@ -971,6 +1045,18 @@ def is_window_open(win_name):
 import urllib.request
 import urllib.parse
 import hashlib
+import ipaddress
+import socket
+
+
+class _SafeCloudRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Validates redirect targets to prevent SSRF or non-HTTP(S) scheme redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        resolved_url = urllib.parse.urljoin(req.full_url, newurl)
+        CloudVideoResolver._validate_url_target(resolved_url)
+        return super().redirect_request(req, fp, code, msg, headers, resolved_url)
+
 
 class CloudVideoResolver:
     """
@@ -981,9 +1067,72 @@ class CloudVideoResolver:
     """
     CACHE_DIR = os.path.join(SAFE_BASE_DIR, "_Cloud_Video_Cache")
 
+    MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB hard cap
+
     @classmethod
     def is_url(cls, path_or_url):
         return str(path_or_url).strip().lower().startswith(("http://", "https://"))
+
+    @staticmethod
+    def _is_unsafe_ip(ip_obj):
+        if getattr(ip_obj, "ipv4_mapped", None) is not None:
+            ip_obj = ip_obj.ipv4_mapped
+        return (
+            ip_obj.is_private
+            or ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or ip_obj.is_multicast
+            or ip_obj.is_reserved
+            or ip_obj.is_unspecified
+        )
+
+    @classmethod
+    def _validate_url_target(cls, url):
+        parsed = urllib.parse.urlparse(str(url).strip())
+        scheme = (parsed.scheme or "").lower()
+        if scheme not in ("http", "https"):
+            raise ValueError(f"Unsupported URL scheme: {scheme}")
+        host = (parsed.hostname or "").strip().lower()
+        if not host or host in ("localhost", "localhost.localdomain") or host.endswith((".local", ".internal", ".localhost")):
+            raise ValueError(f"Unsafe or restricted target host: {host}")
+
+        # 1. Direct IP literal check
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            ip = None
+
+        if ip is not None:
+            if cls._is_unsafe_ip(ip):
+                raise ValueError(f"Private or loopback IP address rejected: {host}")
+            return
+
+        # 2. Hostname DNS resolution check (blocks DNS rebinding / nip.io / internal hostnames pointing to private IPs)
+        try:
+            addr_info = socket.getaddrinfo(host, parsed.port or (443 if scheme == "https" else 80), proto=socket.IPPROTO_TCP)
+        except socket.gaierror:
+            addr_info = []
+
+        for entry in addr_info:
+            sockaddr = entry[4]
+            if not sockaddr:
+                continue
+            resolved_ip_str = sockaddr[0].split("%")[0]
+            try:
+                resolved_ip = ipaddress.ip_address(resolved_ip_str)
+            except ValueError:
+                continue
+            if cls._is_unsafe_ip(resolved_ip):
+                raise ValueError(f"Hostname {host} resolves to restricted private or loopback IP: {resolved_ip_str}")
+
+    @classmethod
+    def _is_trusted_microsoft_host(cls, url):
+        try:
+            host = (urllib.parse.urlparse(str(url).strip()).hostname or "").lower()
+        except Exception:
+            return False
+        trusted_suffixes = ("sharepoint.com", "teams.microsoft.com", "stream.office.com", "onedrive.live.com", "1drv.ms")
+        return any(host == sfx or host.endswith("." + sfx) for sfx in trusted_suffixes)
 
     @classmethod
     def hydrate_cloud_placeholder(cls, filepath, log_cb=print):
@@ -1005,32 +1154,44 @@ class CloudVideoResolver:
     def _transform_shared_cloud_url(cls, url):
         """Converts Google Drive and OneDrive/SharePoint sharing links into direct download streams."""
         u = url.strip()
+        try:
+            parsed = urllib.parse.urlparse(u)
+            host = (parsed.hostname or "").lower()
+        except Exception:
+            return u
         # Google Drive link átalakítása
-        if "drive.google.com/file/d/" in u:
+        if (host == "drive.google.com" or host.endswith(".drive.google.com")) and "/file/d/" in u:
             parts = u.split("/file/d/")
             if len(parts) > 1:
                 file_id = parts[1].split("/")[0].split("?")[0]
                 return f"https://drive.google.com/uc?export=download&id={file_id}"
         # OneDrive / SharePoint / Teams megosztott link közvetlen letöltése
-        if ("1drv.ms" in u or "sharepoint.com" in u or "onedrive.live.com" in u) and "download=1" not in u:
+        if cls._is_trusted_microsoft_host(u) and "download=1" not in u:
             sep = "&" if "?" in u else "?"
             return f"{u}{sep}download=1"
         return u
 
     @classmethod
-    def resolve_to_local_path(cls, path_or_url, log_cb=print, browser_for_auth="edge"):
+    def resolve_to_local_path(cls, path_or_url, log_cb=print, browser_for_auth=None):
         """
         Returns a valid, locally readable video file path from a local path, Teams placeholder, or URL.
         """
         raw = str(path_or_url).strip()
+        if "://" in raw and not cls.is_url(raw):
+            scheme = raw.split("://", 1)[0].lower()
+            log_cb(f"❌ [Cloud Error] Nem támogatott URL séma: {scheme}")
+            raise ValueError(f"Unsupported URL scheme: {scheme}")
         if not cls.is_url(raw):
             norm_p = os.path.normpath(raw)
             cls.hydrate_cloud_placeholder(norm_p, log_cb=log_cb)
             return norm_p
 
         os.makedirs(cls.CACHE_DIR, exist_ok=True)
-        url_hash = hashlib.md5(raw.encode("utf-8")).hexdigest()[:10]
-        parsed_path = urllib.parse.urlparse(raw).path
+        url_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+        parsed_raw = urllib.parse.urlparse(raw)
+        if parsed_raw.scheme.lower() not in ("http", "https"):
+            raise ValueError(f"Unsupported URL scheme: {parsed_raw.scheme}")
+        parsed_path = parsed_raw.path
         base_name = os.path.basename(parsed_path) or f"cloud_video_{url_hash}.mp4"
         base_name = "".join(c for c in base_name if c.isalnum() or c in (".", "_", "-"))
         if not base_name.lower().endswith((".mp4", ".avi", ".mov", ".mkv")):
@@ -1042,26 +1203,58 @@ class CloudVideoResolver:
             return cached_file
 
         direct_url = cls._transform_shared_cloud_url(raw)
+        cls._validate_url_target(raw)
+        cls._validate_url_target(direct_url)
+
         log_cb(f"🌐 [Cloud Downloader] Downloading remote video: {raw[:75]}...")
 
-        # 1. Kísérlet: yt-dlp Python API (Teams/SharePoint/Stream/YouTube + Böngésző Cookie támogatás)
+        # 1. Kísérlet: yt-dlp Python API (first verify redirect chain with _SafeCloudRedirectHandler)
         if importlib.util.find_spec("yt_dlp") is not None:
             try:
+                probe_opener = urllib.request.build_opener(_SafeCloudRedirectHandler())
+                for probe_method in ("HEAD", "GET"):
+                    try:
+                        probe_req = urllib.request.Request(
+                            direct_url,
+                            method=probe_method,
+                            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+                        )
+                        with probe_opener.open(probe_req, timeout=15) as probe_resp:
+                            probe_final = getattr(probe_resp, "url", None) or (
+                                probe_resp.geturl() if hasattr(probe_resp, "geturl") else None
+                            )
+                            if isinstance(probe_final, str) and probe_final.strip():
+                                cls._validate_url_target(probe_final)
+                        break
+                    except urllib.error.HTTPError as he:
+                        if he.code in (405, 501) and probe_method == "HEAD":
+                            continue
+                        break
+
                 import yt_dlp
                 ydl_opts = {
                     "outtmpl": cached_file,
                     "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
                     "quiet": True,
                     "no_warnings": True,
+                    "max_filesize": cls.MAX_DOWNLOAD_BYTES,
                 }
-                # Ha SharePoint / Teams privát link, átvesszük a bejelentkezett böngésző sütijeit
-                if any(k in raw.lower() for k in ("sharepoint.com", "teams.microsoft.com", "stream.office.com")):
+                # Only use browser cookies when explicitly provided AND hostname is a verified Microsoft domain
+                if browser_for_auth and cls._is_trusted_microsoft_host(raw):
                     ydl_opts["cookiesfrombrowser"] = (browser_for_auth,)
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([raw])
                 if os.path.exists(cached_file) and os.path.getsize(cached_file) > 102400:
                     log_cb(f"✅ [Cloud Downloader] Saved via yt-dlp: {os.path.basename(cached_file)}")
                     return cached_file
+            except ValueError as ve:
+                if os.path.exists(cached_file):
+                    try:
+                        os.remove(cached_file)
+                    except OSError:
+                        pass
+                log_cb(f"❌ [Cloud Error] Unsafe redirect or target blocked: {ve}")
+                raise
             except Exception as e:
                 log_cb(f"ℹ [yt-dlp fallback] Direct HTTP stream attempt ({e})...")
 
@@ -1071,29 +1264,67 @@ class CloudVideoResolver:
                 direct_url,
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
             )
-            with urllib.request.urlopen(req, timeout=45) as resp, open(cached_file, "wb") as out_f:
-                shutil.copyfileobj(resp, out_f, length=1024 * 512)
+            opener = urllib.request.build_opener(_SafeCloudRedirectHandler())
+            open_fn = (
+                urllib.request.urlopen
+                if getattr(urllib.request.urlopen, "__module__", "") != "urllib.request"
+                else opener.open
+            )
+            with open_fn(req, timeout=45) as resp, open(cached_file, "wb") as out_f:
+                final_url = getattr(resp, "url", None) or (resp.geturl() if hasattr(resp, "geturl") else None)
+                if isinstance(final_url, str) and final_url.strip():
+                    cls._validate_url_target(final_url)
+                total_read = 0
+                chunk_size = 1024 * 512
+                while True:
+                    chunk = resp.read(chunk_size)
+                    if not chunk:
+                        break
+                    total_read += len(chunk)
+                    if total_read > cls.MAX_DOWNLOAD_BYTES:
+                        raise RuntimeError("Remote video exceeds maximum allowed size (2 GB).")
+                    out_f.write(chunk)
 
-            if os.path.exists(cached_file) and os.path.getsize(cached_file) > 102400:
+            if os.path.exists(cached_file) and os.path.getsize(cached_file) > 0:
                 # Ellenőrizzük, hogy nem egy HTML login oldalt töltött-e le a videó helyett
                 with open(cached_file, "rb") as chk:
-                    header_bytes = chk.read(256).lower()
+                    header_bytes = chk.read(512).lower()
                 if b"<!doctype html" in header_bytes or b"<html" in header_bytes:
                     os.remove(cached_file)
                     raise RuntimeError(
                         "A link bejelentkezést igényel (HTML oldal érkezett videó helyett). "
                         "Teams/SharePoint esetén használd a Teams 'Szinkronizálás' (Sync) gombját vagy telepítsd a 'yt-dlp' csomagot!"
                     )
-                log_cb(f"✅ [Cloud Downloader] Downloaded: {os.path.basename(cached_file)}")
-                return cached_file
-        except Exception as exc:
+                if os.path.getsize(cached_file) > 102400:
+                    log_cb(f"✅ [Cloud Downloader] Downloaded: {os.path.basename(cached_file)}")
+                    return cached_file
+                os.remove(cached_file)
+                raise RuntimeError("Downloaded remote file is too small or incomplete (< 100 KB).")
+        except (RuntimeError, ValueError) as exc:
+            if os.path.exists(cached_file):
+                try:
+                    os.remove(cached_file)
+                except OSError:
+                    pass
             log_cb(f"❌ [Cloud Error] Failed to download URL: {exc}")
+            raise
+        except Exception as exc:
+            if os.path.exists(cached_file):
+                try:
+                    os.remove(cached_file)
+                except OSError:
+                    pass
+            log_cb(f"❌ [Cloud Error] Failed to download URL: {exc}")
+            raise RuntimeError(f"Failed to download remote video from URL: {exc}") from exc
 
-        # 3. Utolsó esély: átadjuk közvetlenül az FFmpeg/OpenCV hálózati dekódernek
-        return direct_url
+        raise RuntimeError("Failed to download remote video: empty or invalid response.")
 
 def open_video_accelerated(video_path, use_hw=True, log_cb=print):
-    resolved_path = CloudVideoResolver.resolve_to_local_path(video_path, log_cb=log_cb)
+    try:
+        resolved_path = CloudVideoResolver.resolve_to_local_path(video_path, log_cb=log_cb)
+    except (ValueError, RuntimeError, OSError) as e:
+        log_cb(f"❌ [Video Open Error] {e}")
+        return cv2.VideoCapture()
     if use_hw and hasattr(cv2, "CAP_PROP_HW_ACCELERATION") and hasattr(cv2, "VIDEO_ACCELERATION_ANY"):
         try:
             cap = cv2.VideoCapture(
@@ -1227,7 +1458,7 @@ class ParallelYoloOpenCVEngine:
     def __init__(self, log_callback=print):
         self.log = log_callback
         self.yolo_model = None
-        self.yolo_lock = threading.Lock()
+        self.yolo_lock = threading.RLock()
         self.device = "cpu"
         self._stopped = False
         self.batch_queue = queue.Queue()
@@ -1527,7 +1758,7 @@ class ParallelYoloOpenCVEngine:
                             r_res, req["rw"], req["rh"], req["rw"], req["rh"], (0, 0), names
                         )
 
-                for req, out in zip(batch, parsed_outputs):
+                for req, out in zip(batch, parsed_outputs, strict=False):
                     req["result"].append(out if out is not None else (None, None, None))
                     req["event"].set()
 
@@ -1643,10 +1874,11 @@ class ParallelYoloOpenCVEngine:
         except Exception:
             return None, None, None
 
-    def _set_thread_pose(self, stream_id, pose_kpts, frame_idx):
+    def _set_thread_pose(self, stream_id, pose_kpts, frame_idx=0):
         self._tls.last_pose = pose_kpts
         self._tls.last_stream_id = stream_id
-        self.last_sync_pose = pose_kpts
+        if stream_id is None or stream_id == "default":
+            self.last_sync_pose = pose_kpts
         if stream_id is not None:
             with self.stream_lock:
                 self.latest_pose_by_stream[stream_id] = (pose_kpts, frame_idx or 0)
@@ -1717,7 +1949,8 @@ class ParallelYoloOpenCVEngine:
                     pose_kpts = res_tuple[2] if len(res_tuple) >= 3 else None
                     self._tls.last_pose = pose_kpts
                     self._tls.last_stream_id = sid
-                    self.last_sync_pose = pose_kpts
+                    if sid == "default":
+                        self.last_sync_pose = pose_kpts
                 else:
                     yolo_bbox, yolo_seg_mask = None, None
                 return yolo_bbox, yolo_seg_mask, result_age
@@ -1733,8 +1966,7 @@ class ParallelYoloOpenCVEngine:
                 entry = self.latest_pose_by_stream.get(stream_id)
                 if entry is not None:
                     pose = entry[0]
-
-        if pose is None:
+        else:
             pose = getattr(self._tls, "last_pose", None) or self.last_sync_pose
 
         if not pose or "bbox" not in pose:
@@ -1931,6 +2163,7 @@ class AutoAdaptiveLadderEngine:
 
     @staticmethod
     def compute_outlier_rejected_bg(stack):
+        stack = np.asarray(stack)
         if stack.shape[0] <= 2:
             return np.max(stack, axis=0).astype(np.uint8)
 
@@ -2035,6 +2268,7 @@ class AutoAdaptiveLadderEngine:
             frames_gray, sample_indices, roi_bg, rx, ry, rw, rh, rung_y_local
         )
         rung_pts_local = self.extract_rung_keypoints(roi_bg, rung_y_local, auto_params["ladder_thresh"])
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
         self.log(
             f"🤖 [Auto-Calib] ROI=({rx},{ry},{rw}x{rh}) | Gates=({left_gate_x}->{right_gate_x}) | "
@@ -2052,7 +2286,8 @@ class AutoAdaptiveLadderEngine:
             "calib_fault_Ratio": auto_params["fault_ratio"],
             "best_preview_frame": auto_params["best_preview_frame"],
             "rung_pts_local": rung_pts_local,
-            "base_rung_y_local": rung_y_local
+            "base_rung_y_local": rung_y_local,
+            "roi_bg": roi_bg,
         }
 
     def compute_auto_thresholds(self, frames_gray, sample_indices, roi_bg, rx, ry, rw, rh, rung_y_local):
@@ -2073,7 +2308,7 @@ class AutoAdaptiveLadderEngine:
         mid_x1 = int(rw * 0.18)
         mid_x2 = int(rw * 0.80)
 
-        for fg, f_idx in zip(frames_gray, sample_indices):
+        for fg, f_idx in zip(frames_gray, sample_indices, strict=False):
             fg_2d = self._ensure_gray_2d(fg)
             crop_f = fg_2d[ry:ry + rh, rx:rx + rw]
             if crop_f.shape != roi_bg.shape:
@@ -2194,13 +2429,11 @@ class ElasticLadderTracker:
         crop_gray = np.squeeze(crop_gray).astype(np.uint8)
 
         curr_strip = crop_gray[self.strip_y1:self.strip_y2, :].copy()
-        mx1, my1, mx2, my2 = -1, -1, -1, -1
+        mx1, mx2 = -1, -1
         if mouse_bbox_local is not None:
-            bx, by, bw, bh = mouse_bbox_local
+            bx, _by, bw, _bh = mouse_bbox_local
             mx1 = max(0, bx - 18)
             mx2 = min(self.rw, bx + bw + 18)
-            my1 = max(0, by - 12)
-            my2 = min(self.rh, by + bh + 12)
             if mx2 > mx1:
                 curr_strip[:, mx1:mx2] = self.base_gray[self.strip_y1:self.strip_y2, mx1:mx2]
 
@@ -2333,11 +2566,13 @@ class DLCAddonManager:
         manifest = []
 
         for res in pending_results:
-            animal_id = res["safe_id"]
-            video_name = os.path.splitext(res["video_name"])[0]
+            raw_id = str(res.get("safe_id") or res.get("animal_id") or "1")
+            animal_id = "".join(c for c in raw_id if c.isalnum() or c in ("-", "_")) or "1"
+            raw_vname = os.path.splitext(os.path.basename(str(res.get("video_name", "video"))))[0]
+            video_name = "".join(c for c in raw_vname if c.isalnum() or c in ("-", "_")) or "video"
 
             for r in res["runs"]:
-                run_num = r["run_num"]
+                run_num = int(r["run_num"])
                 for d_idx, d in enumerate(r["dips"], start=1):
                     if not d.get("valid", True):
                         continue
@@ -2351,7 +2586,7 @@ class DLCAddonManager:
                     cx2, cy2 = min(fw, dx + 180), min(fh, dy + 100)
                     crop_img = frame[cy1:cy2, cx1:cx2]
 
-                    base_fname = f"egyed_{animal_id}_{video_name}_run{run_num}_dip{d_idx}_{d['sec']:.2f}s.jpg"
+                    base_fname = os.path.basename(f"egyed_{animal_id}_{video_name}_run{run_num}_dip{d_idx}_{d['sec']:.2f}s.jpg")
                     save_image_unicode(os.path.join(crops_dir, base_fname), crop_img)
                     save_image_unicode(os.path.join(full_dir, base_fname), frame)
 
@@ -2517,8 +2752,9 @@ class DLCAddonManager:
                     head_pitch_down = bool(d.get("head_pitch_down", False))
 
                     anat_obj = d.get("anatomy")
+                    ox, oy = d.get("roi_offset", (0, 0))
                     part_label, part_code = self.classify_dip_with_anatomy(
-                        dx, dy, anat_obj, rel_pos_norm, aspect_ratio, dip_depth, skin_score, head_pitch_down, move_dir
+                        dx - ox, dy - oy, anat_obj, rel_pos_norm, aspect_ratio, dip_depth, skin_score, head_pitch_down, move_dir
                     )
                     d["dlc_part"] = part_label
                     d["dlc_code"] = part_code
@@ -2643,7 +2879,9 @@ class DLCAddonManager:
             ladder_t = auto_res["calib_ladder_thresh"]
             fault_y_local = int(rh * (auto_res["calib_fault_Ratio"] / 100.0))
 
-            base_gray = app_ref._compute_clean_background(cap, rx, ry, rw, rh, num_samples=24)
+            base_gray = auto_res.get("roi_bg")
+            if base_gray is None:
+                base_gray = app_ref._compute_clean_background(cap, rx, ry, rw, rh, num_samples=24)
             if base_gray is None:
                 cap.release()
                 continue
@@ -2756,7 +2994,7 @@ class DLCAddonManager:
                 progress_cb(0.0, f"Hiba: Legalább 6 aktív minta szükséges a betanításhoz! (Jelenleg {len(active)} aktív, {omitted_count} kizárva)")
             return None
 
-        torch = _get_torch()
+        _get_torch()
         ensure_safe_torchvision_nms()
         from ultralytics import YOLO
 
@@ -2780,7 +3018,7 @@ class DLCAddonManager:
                 bx, by, bw, bh = s["bbox"]
                 rh, rw = crop.shape[:2]
 
-                is_val = (idx % 5 == 0)
+                is_val = (idx % 5 == 0) or (idx == len(active) - 1 and idx < 5)
                 tgt_img = img_va if is_val else img_tr
                 tgt_lbl = lbl_va if is_val else lbl_tr
 
@@ -2791,7 +3029,7 @@ class DLCAddonManager:
                 bh_n = np.clip(bh / float(rh), 0.02, 0.98)
 
                 stem_full = f"rodent_f_{idx:04d}"
-                cv2.imwrite(os.path.join(tgt_img, f"{stem_full}.jpg"), crop)
+                save_image_unicode(os.path.join(tgt_img, f"{stem_full}.jpg"), crop)
                 with open(os.path.join(tgt_lbl, f"{stem_full}.txt"), "w", encoding="utf-8") as lf:
                     lf.write(f"0 {cx_n:.6f} {cy_n:.6f} {bw_n:.6f} {bh_n:.6f}\n")
 
@@ -2814,12 +3052,13 @@ class DLCAddonManager:
                     rel_bh_n = np.clip(bh / float(ch), 0.02, 0.98)
 
                     stem_ctx = f"rodent_c_{idx:04d}"
-                    cv2.imwrite(os.path.join(tgt_img, f"{stem_ctx}.jpg"), ctx_crop)
+                    save_image_unicode(os.path.join(tgt_img, f"{stem_ctx}.jpg"), ctx_crop)
                     with open(os.path.join(tgt_lbl, f"{stem_ctx}.txt"), "w", encoding="utf-8") as lf:
                         lf.write(f"0 {rel_cx_n:.6f} {rel_cy_n:.6f} {rel_bw_n:.6f} {rel_bh_n:.6f}\n")
 
+            safe_ds_path = dataset_dir.replace("\\", "/")
             yaml_path = os.path.join(dataset_dir, "rodent.yaml")
-            yaml_content = f"path: {dataset_dir}\ntrain: images/train\nval: images/val\nnames:\n  0: rodent\n"
+            yaml_content = f"path: '{safe_ds_path}'\ntrain: images/train\nval: images/val\nnames:\n  0: rodent\n"
             with open(yaml_path, "w", encoding="utf-8") as yf:
                 yf.write(yaml_content)
 
@@ -2884,7 +3123,8 @@ class DLCAddonManager:
                     logger.debug("Local rodent_detector copy error: %s", e)
                 self.log(f"✅ [Rodent AI Trainer] Custom model saved: {target_pt}")
                 if hasattr(app_ref, "hybrid_locator"):
-                    app_ref.hybrid_locator._init_yolo()
+                    with app_ref.hybrid_locator.yolo_lock:
+                        app_ref.hybrid_locator._init_yolo()
                     if hasattr(app_ref, "_refresh_kpi_summary"):
                         app_ref.root.after(0, app_ref._refresh_kpi_summary)
                 if progress_cb:
@@ -2927,7 +3167,7 @@ class DLCAddonManager:
                 progress_cb(0.0, f"Hiba: Legalább 6 aktív minta szükséges a betanításhoz! (Jelenleg {len(active)} aktív, {omitted_count} kizárva)")
             return None
 
-        torch = _get_torch()
+        _get_torch()
         ensure_safe_torchvision_nms()
         from ultralytics import YOLO
 
@@ -3134,7 +3374,8 @@ class DLCAddonManager:
 
                 self.log(f"✅ [Paw AI Trainer] Custom 9-keypoint Paw Pose model saved: {target_pt}")
                 if hasattr(app_ref, "hybrid_locator"):
-                    app_ref.hybrid_locator._init_yolo()
+                    with app_ref.hybrid_locator.yolo_lock:
+                        app_ref.hybrid_locator._init_yolo()
                     if hasattr(app_ref, "_refresh_kpi_summary"):
                         app_ref.root.after(0, app_ref._refresh_kpi_summary)
                 if progress_cb:
@@ -3346,12 +3587,12 @@ class PerVideoIDTrackerApp:
             background=P["bg_card"],
             foreground=P["text_main"],
             font=(font_family, 9),
-            focuscolor=P["bg_card"]
+            focuscolor=P["cyan"]
         )
         style.map(
             "Dark.TCheckbutton",
             background=[("active", P["bg_card"])],
-            foreground=[("active", P["cyan"])]
+            foreground=[("active", P["cyan"]), ("focus", P["cyan"])]
         )
 
         style.configure(
@@ -3399,12 +3640,16 @@ class PerVideoIDTrackerApp:
         for s_name, (bg_col, active_col, fg_col, fnt) in btn_specs.items():
             style.configure(
                 s_name, background=bg_col, foreground=fg_col, font=fnt,
-                padding=(11, 6), borderwidth=1, bordercolor=P["border"], relief="flat"
+                padding=(11, 6), borderwidth=1, bordercolor=P["border"],
+                focuscolor=P["cyan"], relief="flat"
             )
             style.map(
                 s_name,
                 background=[("active", active_col), ("disabled", "#1E293B")],
-                foreground=[("disabled", "#64748B")]
+                foreground=[("disabled", "#64748B")],
+                bordercolor=[("focus", P["cyan"])],
+                lightcolor=[("focus", P["cyan"])],
+                darkcolor=[("focus", P["cyan"])],
             )
 
     def _create_section_card(self, parent, title_text, accent_color=None, badge_text=None):
@@ -4202,7 +4447,7 @@ class PerVideoIDTrackerApp:
         lbl_tot_val = _make_t_row(t_card, self.tr("lbl_tot_samples"), "0")
         lbl_act_val = _make_t_row(t_card, self.tr("lbl_act_samples"), "0", val_fg=P["emerald"])
         lbl_excl_val = _make_t_row(t_card, self.tr("lbl_excl_samples"), "0", val_fg=P["danger"])
-        lbl_src_val = _make_t_row(t_card, self.tr("lbl_src_videos"), str(len(self.video_data)))
+        _make_t_row(t_card, self.tr("lbl_src_videos"), str(len(self.video_data)))
 
         # Hyperparameters Card
         p_card = tk.LabelFrame(
@@ -4271,7 +4516,7 @@ class PerVideoIDTrackerApp:
                 ch = max(300, canvas_view.winfo_height())
                 canvas_view.create_text(
                     cw // 2, ch // 2,
-                    text="🔍 Minták keresése a videókból folyamatban...",
+                    text=self.tr("train_searching_canvas"),
                     fill=P["text_muted"], font=(self.ui_font, 11, "bold")
                 )
                 return
@@ -4474,13 +4719,24 @@ class PerVideoIDTrackerApp:
                     slider_samples.config(to=len(samples_list))
             preview_win.after(0, _gui_add)
 
+        is_busy = [False]
+
+        def _set_controls_busy(busy):
+            is_busy[0] = bool(busy)
+            st = "disabled" if busy else "normal"
+            for w in (btn_train, btn_rescan, btn_test, btn_exclude, btn_auto_clean):
+                if w.winfo_exists():
+                    w.config(state=st)
+
         def _start_harvest():
+            if is_busy[0]:
+                return
             samples_list.clear()
             current_idx[0] = 0
             canvas_view.delete("all")
             lbl_sample_info.config(text=self.tr("status_harvesting"), fg=P["cyan"])
-            lbl_prog_status.config(text="Minták keresése és kinyerése...", fg=P["text_muted"])
-            btn_train.config(state="disabled")
+            lbl_prog_status.config(text=self.tr("train_searching_status"), fg=P["text_muted"])
+            _set_controls_busy(True)
 
             def _worker():
                 try:
@@ -4495,25 +4751,28 @@ class PerVideoIDTrackerApp:
                     def _done():
                         if not preview_win.winfo_exists():
                             return
+                        _set_controls_busy(False)
                         if samples_list:
                             lbl_sample_info.config(text=self.tr("status_ready"), fg=P["emerald"])
-                            lbl_prog_status.config(text=f"{len(samples_list)} minta kész a betanításra!", fg=P["emerald"])
-                            btn_train.config(state="normal")
+                            lbl_prog_status.config(text=self.tr("train_samples_ready_status", n=len(samples_list)), fg=P["emerald"])
                             _render_current_sample()
                         else:
-                            lbl_sample_info.config(text="⚠ Nem található érvényes egérminta a videókban.", fg=P["amber"])
-                            lbl_prog_status.config(text="Nincs elegendő minta a tréninghez.", fg=P["amber"])
+                            btn_train.config(state="disabled")
+                            lbl_sample_info.config(text=self.tr("train_no_samples_warn"), fg=P["amber"])
+                            lbl_prog_status.config(text=self.tr("train_insufficient_samples"), fg=P["amber"])
                     preview_win.after(0, _done)
 
             threading.Thread(target=_worker, daemon=True).start()
 
         def _start_training():
+            if is_busy[0]:
+                return
             active_cnt = sum(1 for s in samples_list if not s.get("excluded", False))
             excl_cnt = len(samples_list) - active_cnt
             if active_cnt < 6:
                 messagebox.showwarning(
                     APP_NAME,
-                    f"Legalább 6 aktív tanítóminta szükséges a betanításhoz!\n(Jelenleg: {active_cnt} aktív, {excl_cnt} kizárva)",
+                    self.tr("train_min_samples_msg", act=active_cnt, excl=excl_cnt),
                     parent=preview_win
                 )
                 return
@@ -4523,10 +4782,10 @@ class PerVideoIDTrackerApp:
             except ValueError:
                 ep_val = 10
 
-            btn_train.config(state="disabled")
-            btn_rescan.config(state="disabled")
+            _set_controls_busy(True)
             prog_bar["value"] = 0
-            lbl_prog_status.config(text="AI modell előkészítése és tréning...", fg=P["cyan"])
+            lbl_prog_status.config(text=self.tr("train_preparing_status"), fg=P["cyan"])
+            samples_snapshot = list(samples_list)
 
             def _log_append(text):
                 def _gui_log():
@@ -4548,13 +4807,13 @@ class PerVideoIDTrackerApp:
                 try:
                     _log_append(f"🧠 [Paw AI Tréning] Betanítás indítása: {active_cnt} aktív minta felhasználásával ({excl_cnt} kizárt minta mellőzve)...")
                     target = self.dlc_addon.train_rodent_pose_from_samples(
-                        self, samples_list, epochs=ep_val, progress_cb=_train_progress, stop_event=train_stop_event
+                        self, samples_snapshot, epochs=ep_val, progress_cb=_train_progress, stop_event=train_stop_event
                     )
                     if target and os.path.exists(target):
                         _log_append(f"✅ Siker! Modell mentve: {os.path.basename(target)}")
                         _log_append(f"🔍 Betanított modell tesztelése a {active_cnt} aktív mintán...")
-                        det_cnt, act_cnt = self.dlc_addon.test_model_on_samples(target, samples_list)
-                        omitted_cnt = len(samples_list) - act_cnt
+                        det_cnt, act_cnt = self.dlc_addon.test_model_on_samples(target, samples_snapshot)
+                        omitted_cnt = len(samples_snapshot) - act_cnt
                         _log_append(f"✔ Detektálva {det_cnt} / {act_cnt} aktív mintán! ({omitted_cnt} kizárt minta kihagyva)")
                         def _success_gui():
                             if preview_win.winfo_exists():
@@ -4575,13 +4834,14 @@ class PerVideoIDTrackerApp:
                 finally:
                     def _re_enable():
                         if preview_win.winfo_exists():
-                            btn_train.config(state="normal")
-                            btn_rescan.config(state="normal")
+                            _set_controls_busy(False)
                     preview_win.after(0, _re_enable)
 
             threading.Thread(target=_train_worker, daemon=True).start()
 
         def _test_current_model():
+            if is_busy[0]:
+                return
             local_pt = get_resource_path("mouse_pose_ai.pt")
             if not os.path.exists(local_pt):
                 safe_pt = os.path.join(SAFE_BASE_DIR, "mouse_pose_ai.pt")
@@ -4594,15 +4854,39 @@ class PerVideoIDTrackerApp:
                         if os.path.exists(safe_pt):
                             local_pt = safe_pt
                         else:
-                            messagebox.showinfo(APP_NAME, "Még nincs betanított AI modell. Indítsa el a tréninget!", parent=preview_win)
+                            messagebox.showinfo(APP_NAME, self.tr("train_no_model_msg"), parent=preview_win)
                             return
-            txt_log.insert("end", f"🔍 Modell tesztelése: {os.path.basename(local_pt)}...\n")
-            det_cnt, act_cnt = self.dlc_addon.test_model_on_samples(local_pt, samples_list)
-            omitted_cnt = len(samples_list) - act_cnt
-            txt_log.insert("end", f"✔ Sikeresen detektálva {det_cnt} / {act_cnt} aktív mintán! ({omitted_cnt} kizárt minta mellőzve)\n")
+            _set_controls_busy(True)
+            txt_log.insert("end", self.tr("train_testing_log", name=os.path.basename(local_pt)))
             txt_log.see("end")
-            var_show_ai.set(True)
-            _render_current_sample()
+            samples_snapshot = list(samples_list)
+
+            def _test_worker():
+                try:
+                    det_cnt, act_cnt = self.dlc_addon.test_model_on_samples(local_pt, samples_snapshot)
+                    omitted_cnt = len(samples_snapshot) - act_cnt
+
+                    def _on_test_done():
+                        if preview_win.winfo_exists():
+                            _set_controls_busy(False)
+                            txt_log.insert("end", self.tr("train_test_done_log", det=det_cnt, act=act_cnt, omitted=omitted_cnt))
+                            txt_log.see("end")
+                            var_show_ai.set(True)
+                            _render_current_sample()
+
+                    preview_win.after(0, _on_test_done)
+                except Exception as exc:
+                    err_msg = str(exc)
+
+                    def _on_test_err():
+                        if preview_win.winfo_exists():
+                            _set_controls_busy(False)
+                            txt_log.insert("end", self.tr("train_test_err_log", err=err_msg))
+                            txt_log.see("end")
+
+                    preview_win.after(0, _on_test_err)
+
+            threading.Thread(target=_test_worker, daemon=True).start()
 
         def _prev_sample(event=None):
             if samples_list:
@@ -4621,14 +4905,19 @@ class PerVideoIDTrackerApp:
                 _render_current_sample()
 
         def _toggle_exclude(event=None):
+            if is_busy[0]:
+                return
             if samples_list and 0 <= current_idx[0] < len(samples_list):
                 s = samples_list[current_idx[0]]
                 s["excluded"] = not s.get("excluded", False)
                 if s["excluded"]:
                     s["ai_pred_bbox"] = None
+                    s["ai_pred_pose"] = None
                 _render_current_sample()
 
         def _auto_clean_samples():
+            if is_busy[0]:
+                return
             changed = 0
             for s in samples_list:
                 # If quality < 65 or aspect < 1.35 or area < 4500
@@ -4636,9 +4925,10 @@ class PerVideoIDTrackerApp:
                 if is_marginal and not s.get("excluded", False):
                     s["excluded"] = True
                     s["ai_pred_bbox"] = None
+                    s["ai_pred_pose"] = None
                     changed += 1
             _render_current_sample()
-            txt_log.insert("end", f"🧹 {changed} db alacsony minőségű/határeset minta automatikusan kizárva!\n")
+            txt_log.insert("end", self.tr("train_auto_clean_log", n=changed))
             txt_log.see("end")
 
         def _on_slider(val):
@@ -5126,7 +5416,7 @@ class PerVideoIDTrackerApp:
             return
         P = self.PALETTE
         dlg = tk.Toplevel(self.root)
-        dlg.title("🌐 Teams / SharePoint / Web Videó Hozzáadása")
+        dlg.title(self.tr("url_dlg_title"))
         dlg.geometry("580x270")
         dlg.configure(bg=P["bg_card"])
         dlg.resizable(False, False)
@@ -5137,7 +5427,7 @@ class PerVideoIDTrackerApp:
         box.pack(fill="both", expand=True)
 
         tk.Label(
-            box, text="Videó URL (Direct MP4 / OneDrive / SharePoint / Google Drive):",
+            box, text=self.tr("url_dlg_prompt"),
             bg=P["bg_card"], fg=P["text_main"], font=(self.ui_font, 10, "bold")
         ).pack(anchor="w")
 
@@ -5150,7 +5440,7 @@ class PerVideoIDTrackerApp:
 
         id_row = tk.Frame(box, bg=P["bg_card"])
         id_row.pack(fill="x", pady=(0, 12))
-        tk.Label(id_row, text="Egyed ID:", bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9)).pack(side="left")
+        tk.Label(id_row, text=f"{self.tr('col_id')}:", bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9)).pack(side="left")
         id_entry = tk.Entry(
             id_row, width=10, font=(self.mono_font, 10, "bold"), justify="center",
             bg=P["bg_main"], fg=P["emerald"], insertbackground=P["emerald"], relief="flat"
@@ -5177,7 +5467,7 @@ class PerVideoIDTrackerApp:
             dlg.destroy()
             files = filedialog.askopenfilenames(
                 initialdir=start_dir,
-                title="Válassz videót a szinkronizált Teams / OneDrive mappából",
+                title=self.tr("url_dlg_file_title"),
                 filetypes=[("Video files", "*.mp4 *.mov *.avi *.mkv *.MP4 *.MOV *.AVI *.MKV"), ("All files", "*.*")]
             )
             if files:
@@ -5206,9 +5496,9 @@ class PerVideoIDTrackerApp:
         url_entry.bind("<Return>", _submit_url)
         btn_bar = tk.Frame(box, bg=P["bg_card"])
         btn_bar.pack(fill="x", pady=(6, 0))
-        ttk.Button(btn_bar, text="📁 Helyi Teams / OneDrive mappa", command=_open_local_teams_folder, style="Teal.TButton").pack(side="left")
-        ttk.Button(btn_bar, text="Mégse", command=dlg.destroy, style="Ghost.TButton").pack(side="right", padx=(6, 0))
-        ttk.Button(btn_bar, text="＋ URL Hozzáadása (Enter)", command=_submit_url, style="Emerald.TButton").pack(side="right")
+        ttk.Button(btn_bar, text=self.tr("url_dlg_local_btn"), command=_open_local_teams_folder, style="Teal.TButton").pack(side="left")
+        ttk.Button(btn_bar, text=self.tr("btn_cancel"), command=dlg.destroy, style="Ghost.TButton").pack(side="right", padx=(6, 0))
+        ttk.Button(btn_bar, text=self.tr("url_dlg_add_btn"), command=_submit_url, style="Emerald.TButton").pack(side="right")
 
     def _append_video_list(self, files):
         existing_paths = {item["path"] for item in self.video_data}
@@ -5466,7 +5756,7 @@ class PerVideoIDTrackerApp:
         self.btn_quick_start.config(state="disabled")
         self.btn_stop.config(state="normal")
 
-        if self.saved_geometry:
+        if self.saved_geometry and not self.var_auto_calib.get():
             g = self.saved_geometry
             self._launch_processing_thread(
                 g["rx"], g["ry"], g["rw"], g["rh"],
@@ -5487,6 +5777,11 @@ class PerVideoIDTrackerApp:
                     "left_gate_x": calib["left_gate_x"],
                     "right_gate_x": calib["right_gate_x"]
                 }
+                self._cached_first_video_bg = (
+                    first_video,
+                    (calib["rx"], calib["ry"], calib["rw"], calib["rh"]),
+                    calib.get("roi_bg"),
+                )
                 self._refresh_kpi_cards()
                 self._launch_processing_thread(
                     calib["rx"], calib["ry"], calib["rw"], calib["rh"],
@@ -5747,9 +6042,15 @@ class PerVideoIDTrackerApp:
 
         core_bbox, spatial_gate = None, None
         if use_yolo is None:
-            try:
-                use_yolo = bool(self.var_yolo_fusion.get())
-            except (RuntimeError, tk.TclError):
+            run_flags = getattr(self, "_run_flags", None)
+            if isinstance(run_flags, dict) and "use_yolo_fusion" in run_flags:
+                use_yolo = bool(run_flags["use_yolo_fusion"])
+            elif threading.current_thread() is threading.main_thread():
+                try:
+                    use_yolo = bool(self.var_yolo_fusion.get())
+                except (RuntimeError, tk.TclError):
+                    use_yolo = True
+            else:
                 use_yolo = True
         if use_yolo:
             core_bbox, spatial_gate = self.hybrid_locator.locate_animal_roi_and_mask(
@@ -5947,7 +6248,7 @@ class PerVideoIDTrackerApp:
 
 
     def _extract_rodent_anatomy(
-        self, mouse_mask, fault_curve, bbox, previous_bbox=None, move_dir=1.0, crop=None, skin_map=None
+        self, mouse_mask, fault_curve, bbox, previous_bbox=None, move_dir=1.0, crop=None, skin_map=None, stream_id=None
     ):
         mh, mw = mouse_mask.shape[:2]
         if bbox is None:
@@ -6194,7 +6495,7 @@ class PerVideoIDTrackerApp:
         fore_paw_pt = sample_ventral_paw(0.46, 0.74, shoulder_pt)
 
         if hasattr(self, "hybrid_locator") and getattr(self.hybrid_locator, "is_rodent_pose", False):
-            ai_pose = self.hybrid_locator.get_latest_pose_for_bbox(bx, by, bw, bh, mw, mh)
+            ai_pose = self.hybrid_locator.get_latest_pose_for_bbox(bx, by, bw, bh, mw, mh, stream_id=stream_id)
             if ai_pose is not None:
                 ai_nose = ai_pose.get("nose_pt")
                 ai_tbase = ai_pose.get("tail_base")
@@ -6363,7 +6664,7 @@ class PerVideoIDTrackerApp:
                 cv2.circle(disp, pt_g, j_rad, (20, 20, 20), 1, cv2.LINE_AA)
 
     def _anatomical_dip_mask(
-        self, mouse_mask, fault_y_or_curve, bbox, previous_bbox, inv_ladder_mask, anatomy=None
+        self, mouse_mask, fault_y_or_curve, bbox, previous_bbox, inv_ladder_mask, anatomy=None, below_fault=None
     ):
         mh, mw = mouse_mask.shape[:2]
         if isinstance(fault_y_or_curve, np.ndarray) and fault_y_or_curve.ndim == 1:
@@ -6391,8 +6692,9 @@ class PerVideoIDTrackerApp:
         if active_x2 > active_x1:
             spotlight[:, active_x1:active_x2] = 255
 
-        rows = np.arange(mh, dtype=np.int32)[:, None]
-        below_fault = (rows >= fault_curve[None, :]).astype(np.uint8) * 255
+        if below_fault is None:
+            rows = np.arange(mh, dtype=np.int32)[:, None]
+            below_fault = (rows >= fault_curve[None, :]).astype(np.uint8) * 255
         paw_zone = cv2.bitwise_and(mouse_mask, cv2.bitwise_and(spotlight, below_fault))
 
         gated_mask = cv2.bitwise_and(
@@ -6404,7 +6706,7 @@ class PerVideoIDTrackerApp:
         self, final_mouse_mask, fault_y_or_curve, crop=None, bbox=None,
         previous_bbox=None, inv_ladder_mask=None, move_dir=1.0, return_meta=False,
         skin_map=None, valid_x_bounds=None, base_gray=None,
-        gray=None, gray_eff=None
+        gray=None, gray_eff=None, stream_id=None
     ):
         mh, mw = final_mouse_mask.shape[:2]
         if isinstance(fault_y_or_curve, np.ndarray) and fault_y_or_curve.ndim == 1:
@@ -6417,17 +6719,20 @@ class PerVideoIDTrackerApp:
 
         anatomy = self._extract_rodent_anatomy(
             final_mouse_mask, fault_curve, bbox, previous_bbox=previous_bbox,
-            move_dir=move_dir, crop=crop, skin_map=skin_map
+            move_dir=move_dir, crop=crop, skin_map=skin_map, stream_id=stream_id
         )
+        row_grid = np.arange(mh, dtype=np.int32)[:, None]
+        below_fault = (row_grid >= fault_curve[None, :mw]).astype(np.uint8) * 255
+
         if crop is not None and bbox is not None:
             gated_mouse_mask = self._anatomical_dip_mask(
-                final_mouse_mask, fault_curve, bbox, previous_bbox, inv_ladder_mask, anatomy=anatomy
+                final_mouse_mask, fault_curve, bbox, previous_bbox, inv_ladder_mask,
+                anatomy=anatomy, below_fault=below_fault
             )
         else:
             gated_mouse_mask = final_mouse_mask
 
-        row_grid = np.arange(mh)[:, None]
-        below_mask = (row_grid >= fault_curve[None, :mw]).astype(np.uint8) * 255
+        below_mask = below_fault.copy() if valid_x_bounds is not None else below_fault
         if valid_x_bounds is not None:
             vx1, vx2 = max(0, int(valid_x_bounds[0])), min(mw, int(valid_x_bounds[1]))
             if vx1 > 0:
@@ -6686,7 +6991,7 @@ class PerVideoIDTrackerApp:
                 if s_val > 2.0:
                     all_positive_speeds.append(s_val)
 
-            for pair, s_val in zip(pts_pairs, smoothed):
+            for pair, s_val in zip(pts_pairs, smoothed, strict=False):
                 all_segments.append((pair[0], pair[1], s_val))
 
         v_ref = max(float(np.percentile(all_positive_speeds, 90)), 15.0) if all_positive_speeds else 100.0
@@ -6696,12 +7001,20 @@ class PerVideoIDTrackerApp:
 
         for p0, p1, spd in all_segments:
             ratio = min(1.0, max(0.0, spd / v_ref))
+            # Colorblind-safe (deuteranopia/protanopia friendly) progression:
+            # Slow (0.0): Deep Magenta/Red (BGR: 90, 30, 235)
+            # Mid  (0.5): High-luminance Amber/Yellow (BGR: 0, 215, 255)
+            # Fast (1.0): Bright Cyan/Teal (BGR: 255, 235, 30)
             if ratio < 0.5:
                 r_norm = ratio * 2.0
-                b_c, g_c, r_c = 0, int(255 * r_norm), 255
+                b_c = int(90 * (1.0 - r_norm))
+                g_c = int(30 + 185 * r_norm)
+                r_c = int(235 + 20 * r_norm)
             else:
                 r_norm = (ratio - 0.5) * 2.0
-                b_c, g_c, r_c = 0, 255, int(255 * (1.0 - r_norm))
+                b_c = int(255 * r_norm)
+                g_c = int(215 + 20 * r_norm)
+                r_c = int(255 * (1.0 - 0.88 * r_norm))
             cv2.line(result, p0, p1, (b_c, g_c, r_c), 3, cv2.LINE_AA)
 
         for idx, d in enumerate(valid_dips, start=1):
@@ -6709,13 +7022,14 @@ class PerVideoIDTrackerApp:
             short_code = d.get("dlc_code", "")
             tag_suffix = f"[{short_code}]" if short_code else ""
             if draw_dip_circles_red:
-                cv2.circle(result, (dx, dy), 13, (255, 255, 255), 3)
+                cv2.circle(result, (dx, dy), 14, (255, 255, 255), 3)
                 cv2.circle(result, (dx, dy), 12, (0, 0, 255), 2)
                 cv2.putText(
                     result, f"#{idx}{tag_suffix} ({d_sec:.2f}s)", (dx - 30, dy + 26),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 220), 2
                 )
             else:
+                cv2.circle(result, (dx, dy), 12, (20, 20, 20), 3)
                 cv2.circle(result, (dx, dy), 10, (255, 255, 255), 2)
                 cv2.putText(
                     result, f"#{idx}{tag_suffix}", (dx - 15, dy - 14),
@@ -6731,9 +7045,9 @@ class PerVideoIDTrackerApp:
         leg_x = max(25, w - 330)
         cv2.rectangle(result, (leg_x - 10, 12), (w - 15, 52), (15, 23, 42), -1)
         cv2.putText(result, "Path:", (leg_x, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1)
-        cv2.putText(result, "SLOW (Red)", (leg_x + 60, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (50, 50, 255), 2)
-        cv2.putText(result, "->", (leg_x + 165, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 255), 1)
-        cv2.putText(result, "FAST (Green)", (leg_x + 195, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (50, 255, 50), 2)
+        cv2.putText(result, "SLOW (Warm)", (leg_x + 56, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (90, 60, 255), 2)
+        cv2.putText(result, "->", (leg_x + 165, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 215, 255), 1)
+        cv2.putText(result, "FAST (Cyan)", (leg_x + 195, 37), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (255, 235, 30), 2)
 
         return result
 
@@ -6786,6 +7100,7 @@ class PerVideoIDTrackerApp:
 
         frame_h, frame_w = first_frame.shape[:2]
         start_preview_frame = None
+        base_gray = None
 
         if self.var_auto_calib.get():
             try:
@@ -6797,6 +7112,7 @@ class PerVideoIDTrackerApp:
                 self.calib_ladder_thresh = calib["calib_ladder_thresh"]
                 self.calib_fault_Ratio = calib["calib_fault_Ratio"]
                 start_preview_frame = calib.get("best_preview_frame")
+                base_gray = calib.get("roi_bg")
             except Exception as e:
                 self.log(f"⚠ Auto-calib fallback ({e})")
                 rx, ry, rw, rh = int(frame_w * 0.05), int(frame_h * 0.35), int(frame_w * 0.90), int(frame_h * 0.30)
@@ -6805,11 +7121,13 @@ class PerVideoIDTrackerApp:
             rx, ry, rw, rh = int(frame_w * 0.05), int(frame_h * 0.35), int(frame_w * 0.90), int(frame_h * 0.30)
             left_gate_x, right_gate_x = int(rx + rw * 0.10), int(rx + rw * 0.86)
 
-        base_gray = self._compute_clean_background(cap, rx, ry, rw, rh, num_samples=28)
+        if base_gray is None:
+            base_gray = self._compute_clean_background(cap, rx, ry, rw, rh, num_samples=28)
         if base_gray is None:
             cap.release()
             self.reset_ui()
             return
+        self._cached_first_video_bg = (first_video, (rx, ry, rw, rh), base_gray)
 
         if start_preview_frame is None:
             start_preview_frame = self._find_best_mouse_preview_frame(cap, base_gray, rx, ry, rw, rh, total_frames)
@@ -6862,7 +7180,7 @@ class PerVideoIDTrackerApp:
             except (tk.TclError, RuntimeError) as e:
                 logger.debug("Calibration loop update ignored: %s", e)
 
-            if not is_window_open(win_calib):
+            if not self.is_running or not is_window_open(win_calib):
                 close_opencv_windows()
                 cap.release()
                 self.reset_ui()
@@ -7032,6 +7350,8 @@ class PerVideoIDTrackerApp:
         # Szálbiztos pillanatkép a Tk változókról (háttérszálak nem olvashatnak közvetlenül Tk változót)
         self._run_flags = {
             "use_gpu": bool(self.var_use_gpu.get()),
+            "auto_calib": bool(self.var_auto_calib.get()),
+            "use_yolo_fusion": bool(self.var_yolo_fusion.get()),
             "dlc_superanimal": bool(self.var_dlc_superanimal.get()),
             "dlc_export_train": bool(self.var_dlc_export_train.get()),
             "enable_review": bool(self.var_enable_review.get()),
@@ -7085,10 +7405,7 @@ class PerVideoIDTrackerApp:
         except (cv2.error, AttributeError) as e:
             logger.debug("OpenCV thread limit configuration skipped: %s", e)
 
-        try:
-            use_yolo_fusion = bool(self.var_yolo_fusion.get())
-        except (RuntimeError, tk.TclError):
-            use_yolo_fusion = True
+        use_yolo_fusion = bool((getattr(self, "_run_flags", {}) or {}).get("use_yolo_fusion", True))
 
         gpu_tag = f"⚡ GPU: {self.gpu_device_name} (Active)" if gpu_active else "GPU: Inactive (CPU Mode)"
         self.log(
@@ -7112,11 +7429,6 @@ class PerVideoIDTrackerApp:
             safe_id = "".join(c for c in animal_id if c.isalnum() or c in ("-", "_")) or "1"
             output_dir = os.path.join(self.output_base_dir, f"Egyed_{safe_id}_eredmenyek")
 
-            fault_y_local = int(rh * (fault_pct / 100.0))
-            zone_width = (right_gate_x - left_gate_x) / 3.0
-            z1_boundary = left_gate_x + zone_width
-            z2_boundary = left_gate_x + 2.0 * zone_width
-
             cap = open_video_accelerated(video_path, use_hw=use_gpu)
             if not cap.isOpened():
                 self.update_row_status(uid, "Error (Open)")
@@ -7135,18 +7447,80 @@ class PerVideoIDTrackerApp:
                 return
 
             fh, fw = first_frame.shape[:2]
-            v_rx = min(max(0, rx), fw - 10)
-            v_ry = min(max(0, ry), fh - 10)
-            v_rw = min(rw, fw - v_rx)
-            v_rh = min(rh, fh - v_ry)
+            (cur_rx, cur_ry, cur_rw, cur_rh,
+             cur_left_gate_x, cur_right_gate_x,
+             cur_dark_t, cur_diff_t,
+             cur_ladder_t, cur_fault_pct,
+             _za, _ka, _cd, _md, _gd, cur_px_per_cm) = roi_data[:16]
+            base_gray = None
+
+            is_first_video = bool(video_data and uid == video_data[0].get("uid"))
+            auto_calib_flag = bool((getattr(self, "_run_flags", {}) or {}).get("auto_calib", False))
+
+            if not is_first_video and auto_calib_flag:
+                try:
+                    v_cal = self.auto_engine.auto_calibrate_from_video(cap, num_bg_samples=28)
+                    cur_rx, cur_ry, cur_rw, cur_rh = v_cal["rx"], v_cal["ry"], v_cal["rw"], v_cal["rh"]
+                    cur_left_gate_x, cur_right_gate_x = v_cal["left_gate_x"], v_cal["right_gate_x"]
+                    cur_dark_t = v_cal["calib_dark_thresh"]
+                    cur_diff_t = v_cal["calib_diff_thresh"]
+                    cur_ladder_t = v_cal["calib_ladder_thresh"]
+                    cur_fault_pct = v_cal["calib_fault_Ratio"]
+                    cur_px_per_cm = max(1, cur_right_gate_x - cur_left_gate_x) / max(0.1, float(_gate_dist_cm))
+                    base_gray = v_cal.get("roi_bg")
+                except Exception as e:
+                    logger.debug("Per-video auto-calib fallback for %s: %s", video_name, e)
+
+            v_rx = min(max(0, cur_rx), fw - 10)
+            v_ry = min(max(0, cur_ry), fh - 10)
+            v_rw = min(cur_rw, fw - v_rx)
+            v_rh = min(cur_rh, fh - v_ry)
+
+            if base_gray is None and is_first_video:
+                cached_bg = getattr(self, "_cached_first_video_bg", None)
+                if (
+                    cached_bg is not None
+                    and cached_bg[0] == video_path
+                    and cached_bg[1] == (v_rx, v_ry, v_rw, v_rh)
+                    and cached_bg[2] is not None
+                ):
+                    base_gray = cached_bg[2]
 
             faded_bg_template = cv2.addWeighted(first_frame, 0.22, np.full_like(first_frame, 255), 0.78, 0)
-            base_gray = self._compute_clean_background(cap, v_rx, v_ry, v_rw, v_rh, num_samples=28)
+            if base_gray is None or base_gray.shape[:2] != (v_rh, v_rw):
+                base_gray = self._compute_clean_background(cap, v_rx, v_ry, v_rw, v_rh, num_samples=28)
             if base_gray is None:
                 cap.release()
                 self.update_row_status(uid, "Error (BG)")
                 self.increment_progress(total_videos)
                 return
+
+            gate_min_x = v_rx + 10
+            gate_max_x = max(gate_min_x + 41, v_rx + v_rw - 10)
+            left_gate_x = min(max(gate_min_x, int(cur_left_gate_x)), gate_max_x - 41)
+            right_gate_x = min(max(left_gate_x + 41, int(cur_right_gate_x)), gate_max_x)
+            if right_gate_x <= left_gate_x + 40:
+                left_gate_x = gate_min_x
+                right_gate_x = max(left_gate_x + 41, gate_max_x)
+            cur_px_per_cm = max(1, right_gate_x - left_gate_x) / max(0.1, float(_gate_dist_cm))
+            dark_t, diff_t = cur_dark_t, cur_diff_t
+            ladder_t, fault_pct = cur_ladder_t, cur_fault_pct
+            px_per_cm = cur_px_per_cm
+
+            fault_y_local = int(v_rh * (fault_pct / 100.0))
+            zone_width = (right_gate_x - left_gate_x) / 3.0
+            z1_boundary = left_gate_x + zone_width
+            z2_boundary = left_gate_x + 2.0 * zone_width
+            v_roi_data = (
+                v_rx, v_ry, v_rw, v_rh,
+                left_gate_x, right_gate_x,
+                dark_t, diff_t,
+                ladder_t, fault_pct,
+                z_active, kin_active,
+                dip_cooldown_sec, dip_min_dist_px,
+                _gate_dist_cm, px_per_cm,
+                *roi_data[16:],
+            )
 
             ladder_mask = self._create_ladder_mask(base_gray, ladder_t, fault_y_local=fault_y_local)
             inv_ladder_mask = cv2.bitwise_not(ladder_mask)
@@ -7204,7 +7578,8 @@ class PerVideoIDTrackerApp:
             zone_moving_times = [0.0, 0.0, 0.0]
             video_runs_list = []
 
-            # Memory-safe reader buffer
+            # Memory-safe reader buffer (always reset VideoCapture to frame 0 before starting reader)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             reader = AsyncVideoReader(cap, v_rx, v_ry, v_rw, v_rh, stride=frame_stride, queue_size=16)
 
             try:
@@ -7374,7 +7749,7 @@ class PerVideoIDTrackerApp:
                                 previous_bbox=previous_bbox_local, inv_ladder_mask=active_inv_ladder,
                                 move_dir=run_direction, return_meta=True, skin_map=skin_idx_map,
                                 valid_x_bounds=valid_ladder_bounds, base_gray=active_base_gray,
-                                gray=crop_gray, gray_eff=gray_eff_track
+                                gray=crop_gray, gray_eff=gray_eff_track, stream_id=uid
                             )
 
                             if is_dip:
@@ -7552,12 +7927,13 @@ class PerVideoIDTrackerApp:
                                         for k in range(1, len(vel_arr)):
                                             dt_a = step_dts[k]
                                             if dt_a > 1e-4:
-                                                accels.append((vel_arr[k] - vel_arr[k - 1]) / dt_a)
+                                                accels.append(((vel_arr[k] - vel_arr[k - 1]) / dt_a, dt_a))
                                         jerks = []
                                         for k in range(1, len(accels)):
-                                            dt_j = step_dts[k]
+                                            accel_curr, dt_j = accels[k]
+                                            accel_prev, _ = accels[k - 1]
                                             if dt_j > 1e-4:
-                                                jerks.append(abs(accels[k] - accels[k - 1]) / dt_j)
+                                                jerks.append(abs(accel_curr - accel_prev) / dt_j)
                                         ref_jerk = max(100.0, float(np.mean(vel_arr) * 80.0))
                                         mean_jerk = float(np.median(jerks)) if jerks else 0.0
                                         jerk_score = float(np.clip((mean_jerk / ref_jerk) * 35.0, 0.0, 100.0))
@@ -7621,10 +7997,15 @@ class PerVideoIDTrackerApp:
                 cap.release()
                 self.hybrid_locator.reset_stream(uid)
 
+            if not self.is_running:
+                return
+
             master_white_canvas = np.full_like(first_frame, 255)
             master_white_canvas[v_ry:v_ry + v_rh, v_rx:v_rx + v_rw] = master_roi_canvas
 
             with lock:
+                if not self.is_running:
+                    return
                 self.pending_results.append({
                     "uid": uid,
                     "video_name": video_name,
@@ -7634,7 +8015,7 @@ class PerVideoIDTrackerApp:
                     "first_frame_buf": encode_frame_compressed(first_frame),
                     "faded_bg_buf": encode_frame_compressed(faded_bg_template),
                     "master_white_buf": encode_frame_compressed(master_white_canvas),
-                    "roi_data": roi_data,
+                    "roi_data": v_roi_data,
                     "runs": video_runs_list,
                     "session_trajectory": session_trajectory
                 })
@@ -7645,8 +8026,16 @@ class PerVideoIDTrackerApp:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             list(executor.map(process_single_video, video_data))
 
+        if not self.is_running:
+            self.pending_results.clear()
+            try:
+                self.root.after(0, self.reset_ui)
+            except (RuntimeError, tk.TclError):
+                pass
+            return
+
         run_flags = getattr(self, "_run_flags", {}) or {}
-        if self.is_running and self.pending_results:
+        if self.pending_results:
             if run_flags.get("dlc_superanimal", False):
                 self.dlc_addon.classify_dips_with_superanimal(self.pending_results)
             if run_flags.get("dlc_export_train", False):
@@ -7658,10 +8047,13 @@ class PerVideoIDTrackerApp:
         try:
             if self.is_running and run_flags.get("enable_review", True) and total_dips_found > 0:
                 self.root.after(0, self.open_review_window)
-            else:
+            elif self.is_running:
                 self.root.after(0, self.finalize_and_export_all)
+            else:
+                self.root.after(0, self.reset_ui)
         except (RuntimeError, tk.TclError):
-            self.finalize_and_export_all()
+            if self.is_running:
+                self.finalize_and_export_all()
 
     # ==========================================================================
     # INTERACTIVE DIP & POSE INSPECTOR (MODERN SCIENTIFIC THEME)
@@ -8113,28 +8505,28 @@ class PerVideoIDTrackerApp:
         direct_part_row.pack(fill="x", pady=(2, 0))
 
         tk.Label(
-            direct_part_row, text="Testrész javítás [1-kattintás]:",
+            direct_part_row, text=self.tr("rev_quick_part_lbl"),
             bg=P["bg_panel"], fg=P["text_muted"], font=(self.ui_font, 8, "bold")
         ).pack(side="left", padx=(0, 6))
 
-        btn_dp_fore = ttk.Button(direct_part_row, text="🐾 Mellső (1/M)", command=set_part_forepaw, style="Ghost.TButton")
+        btn_dp_fore = ttk.Button(direct_part_row, text=self.tr("rev_fore_btn"), command=set_part_forepaw, style="Ghost.TButton")
         btn_dp_fore.pack(side="left", padx=(0, 4))
-        ToolTip(btn_dp_fore, lambda: "Mellső mancs hiba azonnali beállítása [1 vagy M]")
+        ToolTip(btn_dp_fore, lambda: self.tr("tt_rev_fore"))
 
-        btn_dp_hind = ttk.Button(direct_part_row, text="🐾 Hátsó (2/H)", command=set_part_hindpaw, style="Ghost.TButton")
+        btn_dp_hind = ttk.Button(direct_part_row, text=self.tr("rev_hind_btn"), command=set_part_hindpaw, style="Ghost.TButton")
         btn_dp_hind.pack(side="left", padx=(0, 4))
-        ToolTip(btn_dp_hind, lambda: "Hátsó mancs hiba azonnali beállítása [2 vagy H]")
+        ToolTip(btn_dp_hind, lambda: self.tr("tt_rev_hind"))
 
-        btn_dp_nose = ttk.Button(direct_part_row, text="🔴 Orr (3/O)", command=set_part_nose, style="Ghost.TButton")
+        btn_dp_nose = ttk.Button(direct_part_row, text=self.tr("rev_nose_btn"), command=set_part_nose, style="Ghost.TButton")
         btn_dp_nose.pack(side="left", padx=(0, 4))
-        ToolTip(btn_dp_nose, lambda: "Orr exploráció azonnali beállítása [3 vagy O]")
+        ToolTip(btn_dp_nose, lambda: self.tr("tt_rev_nose"))
 
-        btn_dp_tail = ttk.Button(direct_part_row, text="🔵 Farok (4/F)", command=set_part_tail, style="Ghost.TButton")
+        btn_dp_tail = ttk.Button(direct_part_row, text=self.tr("rev_tail_btn"), command=set_part_tail, style="Ghost.TButton")
         btn_dp_tail.pack(side="left", padx=(0, 4))
-        ToolTip(btn_dp_tail, lambda: "Farok billenés azonnali beállítása [4 vagy F]")
+        ToolTip(btn_dp_tail, lambda: self.tr("tt_rev_tail"))
 
         tk.Label(
-            direct_part_row, text="💡 Shift+Kattintás a képen: Pont áthelyezése a mancsra",
+            direct_part_row, text=self.tr("rev_shift_hint"),
             bg=P["bg_panel"], fg=P["cyan"], font=(self.ui_font, 8)
         ).pack(side="right", padx=4)
 
@@ -8154,16 +8546,16 @@ class PerVideoIDTrackerApp:
             n_exp = self.dlc_addon.export_training_dataset(self.pending_results, target_dir)
             messagebox.showinfo(
                 APP_NAME,
-                f"✅ {n_exp} db felülvizsgált és jóváhagyott hiba-képkocka sikeresen mentve a tanítóadatbázisba!\n\nKönyvtár:\n{target_dir}",
+                self.tr("msg_rev_exported", n=n_exp, path=target_dir),
                 parent=rev_win
             )
 
         btn_r_train = ttk.Button(
-            bottom_bar, text="🧠 Mentés Tanítóadatbázisba",
+            bottom_bar, text=self.tr("rev_save_train_btn"),
             command=save_to_training_db, style="Teal.TButton"
         )
         btn_r_train.pack(side="left")
-        ToolTip(btn_r_train, lambda: "A felülvizsgált, pontosított hibaképek exportálása a tanítóadatbázisba (Active Learning)")
+        ToolTip(btn_r_train, lambda: self.tr("rev_save_train_tt"))
 
         def confirm_and_close(event=None):
             try:
@@ -8220,6 +8612,20 @@ class PerVideoIDTrackerApp:
         self.log("\n💾 [Export] Finalizing kinematic metrics, velocity heatmaps & CSV tables in background...")
         threading.Thread(target=self._export_worker, daemon=True).start()
 
+    @staticmethod
+    def _sanitize_csv_cell(val):
+        """Prevents CSV formula injection (DDE / spreadsheet macro execution) on user-supplied text."""
+        if not isinstance(val, str) or not val:
+            return val
+        if val[0] in ("=", "+", "-", "@", "\t", "\r", "\n") or val.lstrip().startswith(("=", "+", "-", "@")):
+            # Allow strictly finite plain decimal negative numbers like "-12" or "-3.5", escape everything else
+            if val[0] == "-":
+                body = val[1:].replace(",", ".", 1)
+                if body and body.replace(".", "", 1).isdigit():
+                    return val
+            return f"'{val}"
+        return val
+
     def _fmt_num(self, val, fmt_str="{:.2f}", use_comma=None):
         s = fmt_str.format(val)
         if use_comma is None:
@@ -8271,7 +8677,8 @@ class PerVideoIDTrackerApp:
                     writer = csv.writer(f, delimiter=';')
                     writer.writerow(csv_headers)
 
-            for res in self.pending_results:
+            results_to_export = list(self.pending_results)
+            for res in results_to_export:
                 uid = res["uid"]
                 video_name = res["video_name"]
                 animal_id = res["animal_id"]
@@ -8452,15 +8859,19 @@ class PerVideoIDTrackerApp:
 
                     fn = self._fmt_num
                     row_data = [
-                        animal_id, video_name, run_count, direction,
+                        self._sanitize_csv_cell(str(animal_id)),
+                        self._sanitize_csv_cell(str(video_name)),
+                        run_count,
+                        self._sanitize_csv_cell(str(direction)),
                         fn(start_time), fn(end_time),
                         fn(transit_time), fn(net_moving_time),
                         dip_count, paw_faults,
                         fore_paw_faults, hind_paw_faults,
                         minor_slips_cnt, deep_falls_cnt,
                         nose_peeks, hind_tails,
-                        dip_times_str,
-                        freeze_count, fn(freeze_sec_total), freeze_intervals_str,
+                        self._sanitize_csv_cell(str(dip_times_str)),
+                        freeze_count, fn(freeze_sec_total),
+                        self._sanitize_csv_cell(str(freeze_intervals_str)),
                         micro_hes_cnt, fn(micro_hes_sec),
                         fn(vel_cv, "{:.3f}"), fn(jerk_score, "{:.1f}"), fn(postural_sway_px, "{:.2f}"), fn(uncertainty_pct, "{:.1f}"),
                         fn(px_per_cm),
@@ -8538,6 +8949,7 @@ class PerVideoIDTrackerApp:
 
     def stop_analysis(self):
         self.is_running = False
+        self.pending_results.clear()
         self.log("Stopping... closing worker threads cleanly...")
 
     def reset_ui(self):
@@ -8556,7 +8968,7 @@ def main():
     configure_native_os_identity()
     SAFE_BASE_DIR = setup_safe_working_directory()
     root = tk.Tk()
-    app = PerVideoIDTrackerApp(root)
+    _app = PerVideoIDTrackerApp(root)
 
     root.lift()
     root.attributes("-topmost", True)

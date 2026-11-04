@@ -11,8 +11,17 @@ dist/
 
 # macOS / Windows rendszerfájlok
 .DS_Store
+**/.DS_Store
 Thumbs.db
+
+# Linter / Teszt gyorsítótárak
+.ruff_cache/
+.pytest_cache/
+.coverage
 
 # Helyi adatok / export mappák
 DLC_Tanitokepek_Export/
 YOLO_Pose_Dataset/
+utolso_kalibracio.json
+Minden_Egyed_Meresi_Adatai.csv
+Egyed_*_eredmenyek/

@@ -30,7 +30,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install opencv-python numpy numba pandas yt-dlp pyinstaller
+          pip install opencv-python numpy numba pandas yt-dlp pyinstaller ruff
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install ultralytics
 
@@ -41,6 +41,12 @@ jobs:
             Write-Error "HIÁNYZIK az icon.ico a repo gyökeréből!"
             exit 1
           }
+
+      - name: Run Linter & Automated Unit / Security Tests (Windows)
+        shell: pwsh
+        run: |
+          ruff check --select E9,F,B MouseTracker.py tests/test_mousetracker.py
+          python -m unittest discover -s tests -v
 
       - name: Build Windows Executable with PyInstaller
         shell: pwsh
@@ -86,7 +92,7 @@ jobs:
       - name: Install Dependencies & PyObjC
         run: |
           python -m pip install --upgrade pip
-          pip install opencv-python numpy numba pandas yt-dlp ultralytics pyinstaller pyobjc-core pyobjc-framework-Cocoa
+          pip install opencv-python numpy numba pandas yt-dlp ultralytics pyinstaller ruff pyobjc-core pyobjc-framework-Cocoa
 
       - name: Verify macOS Icons Exist
         run: |
@@ -94,6 +100,11 @@ jobs:
             echo "HIÁNYZIK az icon.icns a repo gyökeréből!"
             exit 1
           fi
+
+      - name: Run Linter & Automated Unit / Security Tests (macOS)
+        run: |
+          ruff check --select E9,F,B MouseTracker.py tests/test_mousetracker.py
+          python3 -m unittest discover -s tests -v
 
       - name: Build macOS .app Bundle with PyInstaller
         run: |
