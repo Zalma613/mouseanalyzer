@@ -1,4 +1,4 @@
-# 🐁 MouseAnalyzer PRO (v3.6)
+# 🐁 MouseAnalyzer PRO
 
 A high-performance, multi-threaded scientific desktop workstation for automated horizontal ladder behavioral tracking, foot-fault (*paw slip*) classification, and kinematic analysis of rodents. Combines sub-pixel OpenCV morphological segmentation, Kalman & elastic ladder-sag tracking, and a specialized **9-Keypoint Rodent Pose AI (`mouse_pose_ai.pt`)**.
 
