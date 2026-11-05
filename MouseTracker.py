@@ -1,4 +1,5 @@
 import os
+import gc
 import sys
 import csv
 import json
@@ -11,6 +12,7 @@ import tempfile
 import subprocess
 import threading
 import importlib.util
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, scrolledtext
@@ -118,6 +120,18 @@ def ensure_safe_torchvision_nms():
         logger.debug("Failed to patch torchvision.ops.nms: %s", e)
 
 
+def _allowlist_ultralytics_torch_globals():
+    """Allowlists Ultralytics model classes for PyTorch 2.6+ weights_only=True unpickling."""
+    try:
+        os.environ.setdefault("YOLO_OFFLINE", "true")
+        import torch
+        from ultralytics.nn.tasks import PoseModel, DetectionModel
+        if hasattr(torch, "serialization") and hasattr(torch.serialization, "add_safe_globals"):
+            torch.serialization.add_safe_globals([PoseModel, DetectionModel])
+    except Exception as e:
+        logger.debug("Ultralytics safe globals allowlist skipped: %s", e)
+
+
 def _get_torch():
     global _TORCH_MODULE, _TORCH_CHECKED
     if not _TORCH_CHECKED:
@@ -126,10 +140,65 @@ def _get_torch():
             import torch
             _TORCH_MODULE = torch
             ensure_safe_torchvision_nms()
+            _allowlist_ultralytics_torch_globals()
         except (ImportError, AttributeError, OSError) as e:
             logger.debug("PyTorch unavailable on this system: %s", e)
             _TORCH_MODULE = None
     return _TORCH_MODULE
+
+
+def ensure_ultralytics_font():
+    """Ensures Arial.ttf exists in Ultralytics config dir to prevent HTTP 416 download crashes,
+    configures Ultralytics offline mode, and monkeypatches check_font as a fail-safe."""
+    try:
+        appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
+        u_dir = Path(appdata) / "Ultralytics"
+        u_dir.mkdir(parents=True, exist_ok=True)
+        target_font = u_dir / "Arial.ttf"
+
+        # Purge 0-byte or corrupted partial files (< 10 KB) that trigger HTTP 416
+        if target_font.exists() and target_font.stat().st_size < 10000:
+            target_font.unlink(missing_ok=True)
+
+        if not target_font.exists():
+            # 1. Try native Windows font
+            win_font = Path("C:/Windows/Fonts/arial.ttf")
+            if win_font.exists():
+                shutil.copy2(win_font, target_font)
+            else:
+                # 2. Try bundled assets folder
+                bundled = Path(get_resource_path("Arial.ttf"))
+                if bundled.exists():
+                    shutil.copy2(bundled, target_font)
+    except Exception as e:
+        logger.debug("Font pre-seed exception: %s", e)
+
+    os.environ.setdefault("YOLO_OFFLINE", "true")
+    try:
+        from ultralytics import settings
+        settings.update({"sync": False, "offline": True})
+    except Exception as e:
+        logger.debug("Ultralytics settings update exception: %s", e)
+
+    try:
+        import ultralytics.utils.checks as _u_checks
+        orig_check_font = getattr(_u_checks, "check_font", None)
+        if orig_check_font is not None and getattr(orig_check_font, "_is_safe_wrapper", None) is not True:
+            def _safe_check_font(font="Arial.ttf", *args, **kwargs):
+                try:
+                    return orig_check_font(font, *args, **kwargs)
+                except Exception as exc:
+                    logger.warning("Ultralytics check_font failed for '%s', continuing without font download: %s", font, exc)
+                    return None
+
+            _safe_check_font._is_safe_wrapper = True
+            _u_checks.check_font = _safe_check_font
+            for _mod_name in ("ultralytics.data.utils", "ultralytics.utils.plotting"):
+                _mod = sys.modules.get(_mod_name)
+                if _mod is not None and hasattr(_mod, "check_font"):
+                    setattr(_mod, "check_font", _safe_check_font)
+    except Exception as e:
+        logger.debug("Ultralytics check_font patch exception: %s", e)
 
 # ==============================================================================
 # RESOURCE PATH & NATIVE OS BRANDING
@@ -1493,6 +1562,9 @@ class ParallelYoloOpenCVEngine:
         self._init_yolo()
 
     def _init_yolo(self):
+        _get_torch()
+        _allowlist_ultralytics_torch_globals()
+        ensure_ultralytics_font()
         try:
             from ultralytics import YOLO
         except ImportError:
@@ -2999,12 +3071,21 @@ class DLCAddonManager:
             return None
 
         _get_torch()
+        _allowlist_ultralytics_torch_globals()
         ensure_safe_torchvision_nms()
+        ensure_ultralytics_font()
+        try:
+            from ultralytics import settings
+            settings.update({"sync": False, "offline": True})
+        except Exception as e:
+            logger.debug("Ultralytics settings update exception: %s", e)
         from ultralytics import YOLO
 
         train_device = get_optimal_compute_device()["device"]
 
         dataset_dir = tempfile.mkdtemp(prefix="rodent_yolo_ds_")
+        model = None
+        training_succeeded = False
         try:
             img_tr = os.path.join(dataset_dir, "images", "train")
             img_va = os.path.join(dataset_dir, "images", "val")
@@ -3017,10 +3098,12 @@ class DLCAddonManager:
                 if stop_event and stop_event.is_set():
                     return None
                 crop, _ = unpack_sample_images(s)
-                if crop is None:
+                if crop is None or crop.ndim < 2:
                     continue
                 bx, by, bw, bh = s["bbox"]
                 rh, rw = crop.shape[:2]
+                if rw <= 0 or rh <= 0:
+                    continue
 
                 is_val = (idx % 5 == 0) or (idx == len(active) - 1 and idx < 5)
                 tgt_img = img_va if is_val else img_tr
@@ -3060,7 +3143,7 @@ class DLCAddonManager:
                     with open(os.path.join(tgt_lbl, f"{stem_ctx}.txt"), "w", encoding="utf-8") as lf:
                         lf.write(f"0 {rel_cx_n:.6f} {rel_cy_n:.6f} {rel_bw_n:.6f} {rel_bh_n:.6f}\n")
 
-            safe_ds_path = dataset_dir.replace("\\", "/")
+            safe_ds_path = Path(dataset_dir).resolve().as_posix()
             yaml_path = os.path.join(dataset_dir, "rodent.yaml")
             yaml_content = f"path: '{safe_ds_path}'\ntrain: images/train\nval: images/val\nnames:\n  0: rodent\n"
             with open(yaml_path, "w", encoding="utf-8") as yf:
@@ -3068,7 +3151,17 @@ class DLCAddonManager:
 
             base_pt = get_resource_path("yolov8n.pt")
             if not os.path.exists(base_pt):
-                base_pt = "yolov8n.pt"
+                base_pt = os.path.join(SAFE_BASE_DIR, "yolov8n.pt")
+            if not os.path.exists(base_pt):
+                base_pt = get_resource_path("rodent_detector.pt")
+            if not os.path.exists(base_pt):
+                base_pt = os.path.join(SAFE_BASE_DIR, "rodent_detector.pt")
+            if not os.path.exists(base_pt):
+                err_msg = "❌ Hiba: Az alapmodell súlyfájl (yolov8n.pt / rodent_detector.pt) nem található helyileg!"
+                self.log(f"❌ [Rodent AI Trainer] {err_msg}")
+                if progress_cb:
+                    progress_cb(0.0, err_msg)
+                return None
 
             runs_dir = os.path.join(dataset_dir, "runs")
             tot_ep = max(1, int(epochs))
@@ -3097,7 +3190,7 @@ class DLCAddonManager:
                 data=yaml_path,
                 epochs=tot_ep,
                 imgsz=int(imgsz),
-                batch=16,
+                batch=min(16, max(2, len(active))),
                 device=train_device,
                 project=runs_dir,
                 name="rodent_run",
@@ -3119,6 +3212,7 @@ class DLCAddonManager:
             if os.path.exists(best_pt):
                 target_pt = os.path.join(SAFE_BASE_DIR, "rodent_detector.pt")
                 shutil.copy2(best_pt, target_pt)
+                training_succeeded = True
                 try:
                     local_pt = get_resource_path("rodent_detector.pt")
                     if os.path.abspath(local_pt) != os.path.abspath(target_pt) and os.access(os.path.dirname(local_pt), os.W_OK):
@@ -3144,7 +3238,12 @@ class DLCAddonManager:
                 progress_cb(0.0, f"Hiba a tréning során: {exc}")
             return None
         finally:
-            shutil.rmtree(dataset_dir, ignore_errors=True)
+            model = None
+            gc.collect()
+            if training_succeeded:
+                shutil.rmtree(dataset_dir, ignore_errors=True)
+            else:
+                logger.debug("Preserving dataset_dir for diagnostics: %s", dataset_dir)
 
     def train_rodent_pose_from_samples(self, app_ref, samples, epochs=12, imgsz=256, progress_cb=None, stop_event=None):
         """
@@ -3172,12 +3271,21 @@ class DLCAddonManager:
             return None
 
         _get_torch()
+        _allowlist_ultralytics_torch_globals()
         ensure_safe_torchvision_nms()
+        ensure_ultralytics_font()
+        try:
+            from ultralytics import settings
+            settings.update({"sync": False, "offline": True})
+        except Exception as e:
+            logger.debug("Ultralytics settings update exception: %s", e)
         from ultralytics import YOLO
 
         train_device = get_optimal_compute_device()["device"]
 
         dataset_dir = tempfile.mkdtemp(prefix="mouse_pose_ds_")
+        model = None
+        training_succeeded = False
         try:
             img_tr = os.path.join(dataset_dir, "images", "train")
             img_va = os.path.join(dataset_dir, "images", "val")
@@ -3196,10 +3304,12 @@ class DLCAddonManager:
                     return None
 
                 crop, _ = unpack_sample_images(s)
-                if crop is None:
+                if crop is None or crop.ndim < 2:
                     continue
                 bx, by, bw, bh = s["bbox"]
                 rh, rw = crop.shape[:2]
+                if rw <= 0 or rh <= 0:
+                    continue
                 anat = s.get("anatomy") or {}
 
                 # Garantáljuk, hogy kis mintaszámnál is legyen validációs kép
@@ -3288,7 +3398,7 @@ class DLCAddonManager:
                         lf.write(lbl_line_ctx)
 
             # POSIX perjelek használata a YAML-ban, hogy Windows alatt se akadjon el a parser
-            safe_ds_path = dataset_dir.replace("\\", "/")
+            safe_ds_path = Path(dataset_dir).resolve().as_posix()
             yaml_path = os.path.join(dataset_dir, "mouse_pose.yaml")
             yaml_content = (
                 f"path: '{safe_ds_path}'\n"
@@ -3308,7 +3418,13 @@ class DLCAddonManager:
             if not os.path.exists(base_pt):
                 base_pt = get_resource_path("yolov8n-pose.pt")
             if not os.path.exists(base_pt):
-                base_pt = "yolov8n-pose.pt"
+                base_pt = os.path.join(SAFE_BASE_DIR, "yolov8n-pose.pt")
+            if not os.path.exists(base_pt):
+                err_msg = "❌ Hiba: Az alapmodell súlyfájl (mouse_pose_ai.pt / yolov8n-pose.pt) nem található helyileg!"
+                self.log(f"❌ [Paw AI Trainer] {err_msg}")
+                if progress_cb:
+                    progress_cb(0.0, err_msg)
+                return None
 
             runs_dir = os.path.join(dataset_dir, "runs")
             tot_ep = max(1, int(epochs))
@@ -3369,6 +3485,7 @@ class DLCAddonManager:
             if os.path.exists(best_pt):
                 target_pt = os.path.join(SAFE_BASE_DIR, "mouse_pose_ai.pt")
                 shutil.copy2(best_pt, target_pt)
+                training_succeeded = True
                 try:
                     local_pt = get_resource_path("mouse_pose_ai.pt")
                     if os.path.abspath(local_pt) != os.path.abspath(target_pt) and os.access(os.path.dirname(local_pt), os.W_OK):
@@ -3395,7 +3512,12 @@ class DLCAddonManager:
                 progress_cb(0.0, f"Hiba a tréning során: {exc}")
             return None
         finally:
-            shutil.rmtree(dataset_dir, ignore_errors=True)
+            model = None
+            gc.collect()
+            if training_succeeded:
+                shutil.rmtree(dataset_dir, ignore_errors=True)
+            else:
+                logger.debug("Preserving dataset_dir for diagnostics: %s", dataset_dir)
 
     def test_model_on_samples(self, model_path, samples):
         """
@@ -3411,6 +3533,9 @@ class DLCAddonManager:
         if not os.path.exists(model_path):
             return 0, 0
         try:
+            _get_torch()
+            _allowlist_ultralytics_torch_globals()
+            ensure_ultralytics_font()
             from ultralytics import YOLO
             model = YOLO(model_path)
             is_pose = ("pose" in model_path.lower()) or getattr(model, "task", "") == "pose"
