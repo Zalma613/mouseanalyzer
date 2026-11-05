@@ -375,5 +375,238 @@ class TestAutoAdaptiveLadderEngine(unittest.TestCase):
         self.assertEqual(cap.pos, 0, "auto_calibrate_from_video must rewind VideoCapture to frame 0")
 
 
+class TestUltralyticsOfflineAndTrainerHardening(unittest.TestCase):
+    """Tests HTTP 416 Arial.ttf guard, offline YOLO settings, check_font monkeypatch,
+    POSIX path normalization, missing base weight validation, dynamic batching,
+    diagnostic directory preservation, and zero-division guards."""
+
+    def _make_active_samples(self, count=6):
+        crop = np.full((80, 160, 3), 120, dtype=np.uint8)
+        mask = np.zeros((80, 160), dtype=np.uint8)
+        crop_buf = mt.encode_frame_compressed(crop)
+        mask_buf = mt.encode_mask_compressed(mask)
+        samples = []
+        for i in range(count):
+            samples.append({
+                "uid": f"s_{i}",
+                "crop_buf": crop_buf,
+                "mask_buf": mask_buf,
+                "bbox": (20, 15, 60, 35),
+                "anatomy": {"nose_pt": (75, 30), "fore_paw_pt": (55, 48), "hind_paw_pt": (30, 48)},
+                "excluded": False,
+            })
+        return samples
+
+    def test_ensure_ultralytics_font_purges_corrupt_and_seeds_bundled(self):
+        with tempfile.TemporaryDirectory() as tmp_appdata, \
+             tempfile.TemporaryDirectory() as tmp_assets:
+            u_dir = os.path.join(tmp_appdata, "Ultralytics")
+            os.makedirs(u_dir, exist_ok=True)
+            corrupt_font = os.path.join(u_dir, "Arial.ttf")
+            # Create a 0-byte corrupted partial download file
+            with open(corrupt_font, "wb") as f:
+                f.write(b"")
+
+            bundled_font = os.path.join(tmp_assets, "Arial.ttf")
+            valid_payload = b"TTF_VALID_FONT_DATA_" * 600  # 12,000 bytes (>= 10 KB)
+            with open(bundled_font, "wb") as f:
+                f.write(valid_payload)
+
+            with unittest.mock.patch.dict(os.environ, {"APPDATA": tmp_appdata}), \
+                 unittest.mock.patch.object(mt, "get_resource_path", return_value=bundled_font):
+                mt.ensure_ultralytics_font()
+
+            self.assertTrue(os.path.exists(corrupt_font))
+            self.assertEqual(os.path.getsize(corrupt_font), len(valid_payload))
+
+    def test_check_font_monkeypatch_catches_http_416_error(self):
+        import ultralytics.utils.checks as u_checks
+        orig = u_checks.check_font
+        try:
+            def _failing_check_font(*args, **kwargs):
+                raise RuntimeError("416 Client Error: Range Not Satisfiable for url: Arial.ttf")
+
+            u_checks.check_font = _failing_check_font
+            mt.ensure_ultralytics_font()
+            # Must not raise RuntimeError; must return None cleanly
+            res = u_checks.check_font("Arial.ttf")
+            self.assertIsNone(res)
+        finally:
+            u_checks.check_font = orig
+
+    def test_allowlist_ultralytics_torch_globals_registers_models(self):
+        import torch
+        from ultralytics.nn.tasks import PoseModel, DetectionModel
+        with unittest.mock.patch.object(torch.serialization, "add_safe_globals") as mock_add:
+            mt._allowlist_ultralytics_torch_globals()
+            mock_add.assert_called_once_with([PoseModel, DetectionModel])
+
+    def test_missing_base_weights_aborts_cleanly_without_network_download(self):
+        addon = mt.DLCAddonManager(lambda _: None)
+        samples = self._make_active_samples(6)
+        progress_msgs = []
+
+        with tempfile.TemporaryDirectory() as empty_dir:
+            missing_pt = os.path.join(empty_dir, "nonexistent.pt")
+            with unittest.mock.patch.object(mt, "get_resource_path", return_value=missing_pt), \
+                 unittest.mock.patch.object(mt, "SAFE_BASE_DIR", empty_dir), \
+                 unittest.mock.patch("ultralytics.YOLO") as mock_yolo:
+                res_det = addon.train_rodent_detector_from_samples(
+                    None, samples, epochs=1, progress_cb=lambda p, m: progress_msgs.append((p, m))
+                )
+                self.assertIsNone(res_det)
+                mock_yolo.assert_not_called()
+                self.assertTrue(any("nem található" in m for _, m in progress_msgs))
+
+                progress_msgs.clear()
+                res_pose = addon.train_rodent_pose_from_samples(
+                    None, samples, epochs=1, progress_cb=lambda p, m: progress_msgs.append((p, m))
+                )
+                self.assertIsNone(res_pose)
+                mock_yolo.assert_not_called()
+                self.assertTrue(any("nem található" in m for _, m in progress_msgs))
+
+    def test_detector_dynamic_batch_posix_yaml_and_cleanup_vs_preservation(self):
+        addon = mt.DLCAddonManager(lambda _: None)
+        samples = self._make_active_samples(6)
+
+        # Include a corrupt 0-dimension sample to verify zero-division guard
+        corrupt_sample = dict(samples[0])
+        corrupt_sample["uid"] = "corrupt_0"
+        samples_with_corrupt = [corrupt_sample] + samples
+        orig_unpack = mt.unpack_sample_images
+
+        def _fake_unpack(s):
+            if s.get("uid") == "corrupt_0":
+                return np.zeros((0, 0, 3), dtype=np.uint8), None
+            return orig_unpack(s)
+
+        # 1. Verify failure preserves dataset_dir for diagnostics and calls gc.collect()
+        created_dirs = []
+        orig_mkdtemp = tempfile.mkdtemp
+
+        def _tracking_mkdtemp(*args, **kwargs):
+            d = orig_mkdtemp(*args, **kwargs)
+            created_dirs.append(d)
+            return d
+
+        class _FailingYOLO:
+            def __init__(self, pt):
+                self.pt = pt
+            def add_callback(self, *args, **kwargs):
+                pass
+            def train(self, **kwargs):
+                raise RuntimeError("Simulated training failure")
+
+        with tempfile.TemporaryDirectory() as tmp_base:
+            dummy_pt = os.path.join(tmp_base, "yolov8n.pt")
+            with open(dummy_pt, "wb") as f:
+                f.write(b"DUMMY_PT")
+
+            with unittest.mock.patch("tempfile.mkdtemp", side_effect=_tracking_mkdtemp), \
+                 unittest.mock.patch.object(mt, "unpack_sample_images", side_effect=_fake_unpack), \
+                 unittest.mock.patch.object(mt, "get_resource_path", return_value=dummy_pt), \
+                 unittest.mock.patch.object(mt, "SAFE_BASE_DIR", tmp_base), \
+                 unittest.mock.patch("ultralytics.YOLO", _FailingYOLO), \
+                 unittest.mock.patch("gc.collect") as mock_gc:
+                res = addon.train_rodent_detector_from_samples(None, samples_with_corrupt, epochs=1)
+                self.assertIsNone(res)
+                mock_gc.assert_called()
+                self.assertEqual(len(created_dirs), 1)
+                preserved_dir = created_dirs[0]
+                self.assertTrue(os.path.exists(preserved_dir), "Failed run must preserve dataset_dir for diagnostics")
+                yaml_file = os.path.join(preserved_dir, "rodent.yaml")
+                self.assertTrue(os.path.exists(yaml_file))
+                with open(yaml_file, "r", encoding="utf-8") as yf:
+                    yaml_text = yf.read()
+                self.assertNotIn("//", yaml_text.split("path:")[1].splitlines()[0])
+                mt.shutil.rmtree(preserved_dir, ignore_errors=True)
+
+        # 2. Verify successful run uses dynamic batch=6 (not 16) and cleans up dataset_dir
+        created_dirs.clear()
+        recorded_train_kwargs = {}
+
+        class _SuccessYOLO:
+            def __init__(self, pt):
+                self.pt = pt
+            def add_callback(self, *args, **kwargs):
+                pass
+            def train(self, **kwargs):
+                recorded_train_kwargs.update(kwargs)
+                weights_dir = os.path.join(kwargs["project"], kwargs["name"], "weights")
+                os.makedirs(weights_dir, exist_ok=True)
+                with open(os.path.join(weights_dir, "best.pt"), "wb") as wf:
+                    wf.write(b"TRAINED_WEIGHTS")
+
+        with tempfile.TemporaryDirectory() as tmp_base:
+            dummy_pt = os.path.join(tmp_base, "yolov8n.pt")
+            with open(dummy_pt, "wb") as f:
+                f.write(b"DUMMY_PT")
+
+            with unittest.mock.patch("tempfile.mkdtemp", side_effect=_tracking_mkdtemp), \
+                 unittest.mock.patch.object(mt, "unpack_sample_images", side_effect=_fake_unpack), \
+                 unittest.mock.patch.object(mt, "get_resource_path", return_value=dummy_pt), \
+                 unittest.mock.patch.object(mt, "SAFE_BASE_DIR", tmp_base), \
+                 unittest.mock.patch("ultralytics.YOLO", _SuccessYOLO):
+                res = addon.train_rodent_detector_from_samples(None, samples_with_corrupt, epochs=2)
+                self.assertIsNotNone(res)
+                self.assertTrue(os.path.exists(res))
+                # Active samples = 7 (1 corrupt skipped + 6 valid), so dynamic batch = min(16, max(2, 7)) = 7
+                self.assertEqual(recorded_train_kwargs.get("batch"), 7)
+                self.assertEqual(len(created_dirs), 1)
+                self.assertFalse(os.path.exists(created_dirs[0]), "Successful run must clean up dataset_dir")
+
+    def test_pose_trainer_zero_div_guard_posix_yaml_and_cleanup_vs_preservation(self):
+        addon = mt.DLCAddonManager(lambda _: None)
+        samples = self._make_active_samples(6)
+        corrupt_sample = dict(samples[0])
+        corrupt_sample["uid"] = "corrupt_pose_0"
+        samples_with_corrupt = [corrupt_sample] + samples
+        orig_unpack = mt.unpack_sample_images
+
+        def _fake_unpack(s):
+            if s.get("uid") == "corrupt_pose_0":
+                return np.zeros((100, 0, 3), dtype=np.uint8), None
+            return orig_unpack(s)
+
+        created_dirs = []
+        orig_mkdtemp = tempfile.mkdtemp
+
+        def _tracking_mkdtemp(*args, **kwargs):
+            d = orig_mkdtemp(*args, **kwargs)
+            created_dirs.append(d)
+            return d
+
+        class _SuccessPoseYOLO:
+            def __init__(self, pt):
+                self.pt = pt
+            def add_callback(self, *args, **kwargs):
+                pass
+            def train(self, **kwargs):
+                with open(kwargs["data"], "r", encoding="utf-8") as yf:
+                    yaml_text = yf.read()
+                assert "//" not in yaml_text.split("path:")[1].splitlines()[0]
+                weights_dir = os.path.join(kwargs["project"], kwargs["name"], "weights")
+                os.makedirs(weights_dir, exist_ok=True)
+                with open(os.path.join(weights_dir, "best.pt"), "wb") as wf:
+                    wf.write(b"TRAINED_POSE_WEIGHTS")
+
+        with tempfile.TemporaryDirectory() as tmp_base:
+            dummy_pt = os.path.join(tmp_base, "mouse_pose_ai.pt")
+            with open(dummy_pt, "wb") as f:
+                f.write(b"DUMMY_POSE_PT")
+
+            with unittest.mock.patch("tempfile.mkdtemp", side_effect=_tracking_mkdtemp), \
+                 unittest.mock.patch.object(mt, "unpack_sample_images", side_effect=_fake_unpack), \
+                 unittest.mock.patch.object(mt, "get_resource_path", return_value=dummy_pt), \
+                 unittest.mock.patch.object(mt, "SAFE_BASE_DIR", tmp_base), \
+                 unittest.mock.patch("ultralytics.YOLO", _SuccessPoseYOLO):
+                res = addon.train_rodent_pose_from_samples(None, samples_with_corrupt, epochs=1)
+                self.assertIsNotNone(res)
+                self.assertTrue(os.path.exists(res))
+                self.assertEqual(len(created_dirs), 1)
+                self.assertFalse(os.path.exists(created_dirs[0]))
+
+
 if __name__ == "__main__":
     unittest.main()
