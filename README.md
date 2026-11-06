@@ -86,7 +86,14 @@ ruff check --select E9,F,B MouseTracker.py tests/test_mousetracker.py
 
 ---
 
-## 📦 Release Notes (`v1.4.6`)
+## 📦 Release Notes (`v1.4.7`)
+
+* **Responsive UI & Anti-Jitter Architecture:**
+  * **Eliminated Section Jumping:** Locked Tkinter geometry propagation (`pack_propagate(False)`) across KPI strip cards, main workspace panels (`list_outer`, `ctrl_outer`), and child inspector panels (`left_outer`, `right_outer`), and isolated dynamic hover hints (`lbl_annot_hint`) onto dedicated status lines so text updates never shift adjacent sections or buttons.
+  * **Hysteresis-Guarded Responsive Breakpoints:** Added smooth, flicker-free layout transitions down to `640×520` on the main workstation (`"split"` vs. `"stacked"` workspace, `4col` vs. `2x2` KPI strip, `1row` vs. `2row` toolbars, and `2col` vs. `1col` parameter grids) and `680×520` on the AI Training & Preview Studio and Interactive Dip & Pose Inspector.
+  * **Scrollable Control Panel & Proportional Tables:** Added an auto-hiding scrollable settings canvas (`ctrl_canvas`) above the pinned Execution Dock, proportional column scaling with horizontal scrolling and live inline Subject ID entry repositioning on `Treeview` tables, middle-ellipsis path truncation, and `3×2` uniform parameter grids in the Advanced Settings dialog.
+
+### Previous Release (`v1.4.6`)
 
 * **Architecture & Maintainability:**
   * Introduced immutable `ROIConfig` dataclass with full legacy tuple unpacking compatibility.

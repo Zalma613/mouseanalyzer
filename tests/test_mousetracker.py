@@ -686,6 +686,67 @@ class TestReviewAndRefactoringImprovements(unittest.TestCase):
                 mt.CloudVideoResolver._validate_peer_socket(rebinding_resp)
             self.assertTrue(rebinding_resp.closed)
 
+    def test_responsive_layout_modes_and_hysteresis(self):
+        try:
+            root = mt.tk.Tk()
+            root.withdraw()
+        except mt.tk.TclError:
+            self.skipTest("Tk display not available in headless environment")
+            return
+
+        try:
+            with unittest.mock.patch.object(mt.ParallelYoloOpenCVEngine, "_init_yolo", return_value=None):
+                app = mt.PerVideoIDTrackerApp(root)
+
+            # Propagation locks must be active to prevent section jumping when child texts change
+            self.assertFalse(app.list_outer.pack_propagate())
+            self.assertFalse(app.ctrl_outer.pack_propagate())
+            for kpi_wrap in app.kpi_card_wraps:
+                self.assertFalse(kpi_wrap.pack_propagate())
+
+            # Wide layout (1260x830)
+            app._apply_responsive_root(1260, 830)
+            self.assertEqual(app._workspace_mode, "split")
+            self.assertEqual(app._kpi_mode, "4col")
+            self.assertEqual(app._toolbar_mode, "1row")
+            self.assertTrue(app._subtitle_visible)
+            self.assertEqual(int(app.log_area.cget("height")), 5)
+
+            # Narrow layout (680x540) -> stacks workspace, 2x2 KPI grid, 2-row toolbar, compact log
+            app._apply_responsive_root(680, 540)
+            self.assertEqual(app._workspace_mode, "stacked")
+            self.assertEqual(app._kpi_mode, "2x2")
+            self.assertEqual(app._toolbar_mode, "2row")
+            self.assertFalse(app._subtitle_visible)
+            self.assertEqual(int(app.log_area.cget("height")), 3)
+
+            # Hysteresis zone (895px is between 880 and 910) -> must stay in "stacked" without oscillating
+            app._apply_responsive_root(895, 700)
+            self.assertEqual(app._workspace_mode, "stacked")
+
+            # Crossing upper threshold (>= 910px) -> transitions back to "split"
+            app._apply_responsive_root(940, 780)
+            self.assertEqual(app._workspace_mode, "split")
+            self.assertEqual(app._kpi_mode, "4col")
+            self.assertTrue(app._subtitle_visible)
+
+            # Parameter grid internal responsiveness (1col vs 2col)
+            app._update_ctrl_internal_responsiveness(300)
+            self.assertEqual(app._param_grid_mode, "1col")
+            app._update_ctrl_internal_responsiveness(380)
+            self.assertEqual(app._param_grid_mode, "2col")
+
+            # Output directory middle-ellipsis formatting on narrow widths
+            app.output_base_dir = "/very/long/laboratory/directory/path/for/mouse/kinematic/experiments/2026_batch_01"
+            short_txt = app._format_output_dir_text(max_chars=45)
+            self.assertIn("...", short_txt)
+            self.assertLessEqual(len(short_txt), 48)
+        finally:
+            try:
+                root.destroy()
+            except mt.tk.TclError:
+                pass
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3669,8 +3669,15 @@ class PerVideoIDTrackerApp:
         self.root = root
         self.lang = "hu"
         self.root.title(f"{APP_NAME} v{APP_VERSION} — Scientific Kinematic & Behavioral Workstation")
-        self.root.geometry("1260x830")
-        self.root.minsize(1060, 720)
+        try:
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            init_w = min(1260, max(760, sw - 60))
+            init_h = min(830, max(600, sh - 80))
+            self.root.geometry(f"{init_w}x{init_h}")
+        except tk.TclError:
+            self.root.geometry("1260x830")
+        self.root.minsize(640, 520)
         self.root.configure(bg=self.PALETTE["bg_main"])
 
         apply_window_icon(self.root)
@@ -3681,6 +3688,18 @@ class PerVideoIDTrackerApp:
         self.completed_videos = 0
         self.pending_results = []
         self._inline_id_entry = None
+        self._inline_id_uid = None
+
+        # Responsive layout state tracking (with hysteresis to prevent layout jumping)
+        self._resp_after_id = None
+        self._last_root_size = (0, 0)
+        self._workspace_mode = None      # "split" or "stacked"
+        self._kpi_mode = None            # "4col" or "2x2"
+        self._toolbar_mode = None        # "1row" or "2row"
+        self._param_grid_mode = None     # "2col" or "1col"
+        self._subtitle_visible = True
+        self._last_tree_w = 0
+        self._last_ctrl_wrap = 0
 
         self.calib_dark_thresh = 135
         self.calib_diff_thresh = 24
@@ -3842,40 +3861,72 @@ class PerVideoIDTrackerApp:
         accent_indicator = tk.Frame(header_bar, bg=accent_color, width=3, height=14)
         accent_indicator.pack(side="left", padx=(0, 8))
 
-        lbl = tk.Label(
-            header_bar, text=title_text, bg=P["bg_card"], fg=P["text_main"],
-            font=(self.ui_font, 10, "bold")
-        )
-        lbl.pack(side="left")
-
         badge = None
         if badge_text:
             badge = tk.Label(
                 header_bar, text=badge_text, bg=P["bg_panel"], fg=P["text_muted"],
                 font=(self.mono_font, 8), padx=6, pady=1
             )
-            badge.pack(side="right")
+            badge.pack(side="right", padx=(6, 0))
+
+        lbl = tk.Label(
+            header_bar, text=title_text, bg=P["bg_card"], fg=P["text_main"],
+            font=(self.ui_font, 10, "bold"), anchor="w"
+        )
+        lbl.pack(side="left", fill="x", expand=True)
 
         divider = tk.Frame(inner, bg=P["border"], height=1)
         divider.pack(fill="x", pady=(0, 8))
 
         return outer, inner, lbl, badge
 
+    def _format_output_dir_text(self, max_chars=85):
+        prefix = self.tr("out_dir_prefix")
+        path_str = str(self.output_base_dir)
+        full = f"{prefix} {path_str}"
+        if len(full) <= max_chars or max_chars < 28:
+            return full
+        avail = max(16, max_chars - len(prefix) - 4)
+        head = avail // 2 - 2
+        tail = avail - head - 3
+        return f"{prefix} {path_str[:head]}...{path_str[-tail:]}"
+
     def _build_ui(self):
         P = self.PALETTE
 
         # ── 1. TOP HEADER BAR ───────────────────────────────────────────────
-        header = tk.Frame(
+        self.header_frame = tk.Frame(
             self.root, bg=P["bg_card"], padx=18, pady=10,
             highlightthickness=1, highlightbackground=P["border"]
         )
-        header.pack(fill="x")
+        self.header_frame.pack(side="top", fill="x")
 
-        header_left = tk.Frame(header, bg=P["bg_card"])
-        header_left.pack(side="left", fill="y")
+        # Pack right button group FIRST so narrow widths never push buttons off-screen
+        self.header_right = tk.Frame(self.header_frame, bg=P["bg_card"])
+        self.header_right.pack(side="right", padx=(8, 0))
 
-        title_line = tk.Frame(header_left, bg=P["bg_card"])
-        title_line.pack(anchor="w")
+        self.btn_change_dir = ttk.Button(
+            self.header_right, text=self.tr("btn_change_dir"), command=self.choose_output_folder, style="Ghost.TButton"
+        )
+        self.btn_change_dir.pack(side="left", padx=(0, 6))
+        ToolTip(self.btn_change_dir, lambda: self.tr("tt_change_dir"))
+
+        self.btn_open_dir = ttk.Button(
+            self.header_right, text=self.tr("btn_open_dir"), command=self.open_results_folder, style="Ghost.TButton"
+        )
+        self.btn_open_dir.pack(side="left", padx=(0, 6))
+        ToolTip(self.btn_open_dir, lambda: self.tr("tt_open_dir"))
+
+        self.btn_lang = ttk.Button(
+            self.header_right, text="HU", width=4, command=self.toggle_language, style="Primary.TButton"
+        )
+        self.btn_lang.pack(side="left")
+
+        self.header_left = tk.Frame(self.header_frame, bg=P["bg_card"])
+        self.header_left.pack(side="left", fill="both", expand=True)
+
+        title_line = tk.Frame(self.header_left, bg=P["bg_card"])
+        title_line.pack(anchor="w", fill="x")
 
         tk.Label(
             title_line, text="MOUSEANALYZER PRO", bg=P["bg_card"], fg=P["text_main"],
@@ -3887,44 +3938,25 @@ class PerVideoIDTrackerApp:
             font=(self.mono_font, 8, "bold"), padx=6, pady=1
         ).pack(side="left", padx=(0, 10))
 
-        tk.Frame(title_line, bg=P["border"], width=1, height=14).pack(side="left", padx=(0, 10))
+        self.header_sep = tk.Frame(title_line, bg=P["border"], width=1, height=14)
+        self.header_sep.pack(side="left", padx=(0, 10))
 
         self.lbl_subtitle = tk.Label(
             title_line, text=self.tr("subtitle"),
-            bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9)
+            bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9), anchor="w"
         )
-        self.lbl_subtitle.pack(side="left")
+        self.lbl_subtitle.pack(side="left", fill="x", expand=True)
 
         self.lbl_output_dir = tk.Label(
-            header_left,
-            text=f"{self.tr('out_dir_prefix')} {self.output_base_dir}",
-            bg=P["bg_card"], fg=P["text_muted"], font=(self.mono_font, 8)
+            self.header_left,
+            text=self._format_output_dir_text(),
+            bg=P["bg_card"], fg=P["text_muted"], font=(self.mono_font, 8), anchor="w"
         )
-        self.lbl_output_dir.pack(anchor="w", pady=(3, 0))
+        self.lbl_output_dir.pack(anchor="w", fill="x", pady=(3, 0))
 
-        header_right = tk.Frame(header, bg=P["bg_card"])
-        header_right.pack(side="right")
-
-        self.btn_change_dir = ttk.Button(
-            header_right, text=self.tr("btn_change_dir"), command=self.choose_output_folder, style="Ghost.TButton"
-        )
-        self.btn_change_dir.pack(side="left", padx=(0, 6))
-        ToolTip(self.btn_change_dir, lambda: self.tr("tt_change_dir"))
-
-        self.btn_open_dir = ttk.Button(
-            header_right, text=self.tr("btn_open_dir"), command=self.open_results_folder, style="Ghost.TButton"
-        )
-        self.btn_open_dir.pack(side="left", padx=(0, 6))
-        ToolTip(self.btn_open_dir, lambda: self.tr("tt_open_dir"))
-
-        self.btn_lang = ttk.Button(
-            header_right, text="HU", width=4, command=self.toggle_language, style="Primary.TButton"
-        )
-        self.btn_lang.pack(side="left")
-
-        # ── 2. SYSTEM TELEMETRY STRIP ───────────────────────────────────────
-        kpi_strip = tk.Frame(self.root, bg=P["bg_main"], padx=16, pady=8)
-        kpi_strip.pack(fill="x")
+        # ── 2. SYSTEM TELEMETRY STRIP (Zero-Jump Uniform Grid) ──────────────
+        self.kpi_strip = tk.Frame(self.root, bg=P["bg_main"], padx=16, pady=8)
+        self.kpi_strip.pack(side="top", fill="x")
 
         engine_tag = "YOLO + 9-Point Articulated Rodent Skeleton" if self.hybrid_locator.yolo_model is not None else "Adaptive Rodent Geometry + Optical Flow"
         self.kpi_vars = {
@@ -3935,6 +3967,7 @@ class PerVideoIDTrackerApp:
         }
 
         self.kpi_title_labels = {}
+        self.kpi_card_wraps = []
         kpi_defs = [
             ("videos", "kpi_videos", self.kpi_vars["videos"], P["text_main"]),
             ("calib", "kpi_calib", self.kpi_vars["calib"], P["cyan"]),
@@ -3942,245 +3975,153 @@ class PerVideoIDTrackerApp:
             ("dlc", "kpi_dlc", self.kpi_vars["dlc"], P["teal"]),
         ]
 
-        for idx, (k_key, k_tr_key, k_var, k_col) in enumerate(kpi_defs):
-            card_wrap = tk.Frame(kpi_strip, bg=P["border"], padx=1, pady=1)
-            card_wrap.pack(side="left", fill="x", expand=True, padx=(0 if idx == 0 else 8, 0))
-            card = tk.Frame(card_wrap, bg=P["bg_card"], padx=12, pady=6)
+        for k_key, k_tr_key, k_var, k_col in kpi_defs:
+            card_wrap = tk.Frame(self.kpi_strip, bg=P["border"], padx=1, pady=1, height=52)
+            card_wrap.pack_propagate(False)
+            card = tk.Frame(card_wrap, bg=P["bg_card"], padx=12, pady=5)
             card.pack(fill="both", expand=True)
             lbl_t = tk.Label(
-                card, text=self.tr(k_tr_key), bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 8, "bold")
+                card, text=self.tr(k_tr_key), bg=P["bg_card"], fg=P["text_muted"],
+                font=(self.ui_font, 8, "bold"), anchor="w"
             )
-            lbl_t.pack(anchor="w")
+            lbl_t.pack(anchor="w", fill="x")
             self.kpi_title_labels[k_key] = lbl_t
             tk.Label(
-                card, textvariable=k_var, bg=P["bg_card"], fg=k_col, font=(self.mono_font, 10, "bold")
-            ).pack(anchor="w", pady=(1, 0))
+                card, textvariable=k_var, bg=P["bg_card"], fg=k_col,
+                font=(self.mono_font, 10, "bold"), anchor="w"
+            ).pack(anchor="w", fill="x", pady=(1, 0))
+            self.kpi_card_wraps.append(card_wrap)
+
+        self._apply_kpi_layout("4col")
+
+        # ── 4. STATUS, PROGRESS & DIAGNOSTIC LOG (Packed side="bottom" first so it never clips!) ──
+        self.bottom_frame = tk.Frame(self.root, bg=P["bg_main"], padx=16, pady=0)
+        self.bottom_frame.pack(side="bottom", fill="x", pady=(0, 12))
+
+        log_outer, log_card, self.lbl_sec3, self.badge_sec3 = self._create_section_card(
+            self.bottom_frame, self.tr("sec3_title"), P["blue"], self.tr("badge_log")
+        )
+        log_outer.pack(fill="x")
+
+        prog_strip = tk.Frame(
+            log_card, bg=P["bg_panel"], padx=10, pady=6,
+            highlightthickness=1, highlightbackground=P["border"]
+        )
+        prog_strip.pack(fill="x", pady=(0, 6))
+
+        self.progress_lbl = tk.Label(
+            prog_strip, text=self.tr("prog_idle", done=0, total=0),
+            bg=P["bg_panel"], fg=P["text_main"], font=(self.ui_font, 9, "bold"), anchor="w"
+        )
+        self.progress_lbl.pack(anchor="w", fill="x", pady=(0, 4))
+
+        self.progress_bar = ttk.Progressbar(
+            prog_strip, style="Emerald.Horizontal.TProgressbar", mode="determinate"
+        )
+        self.progress_bar.pack(fill="x")
+
+        log_border = tk.Frame(log_card, bg=P["border"], padx=1, pady=1)
+        log_border.pack(fill="both", expand=True)
+
+        self.log_area = scrolledtext.ScrolledText(
+            log_border, wrap=tk.WORD, font=(self.mono_font, 9),
+            height=4, state="disabled", bg="#080C14", fg="#E2E8F0",
+            insertbackground=P["cyan"], relief="flat", borderwidth=0, padx=8, pady=6
+        )
+        self.log_area.pack(fill="both", expand=True)
 
         # ── 3. CENTRAL SPLIT WORKSPACE ──────────────────────────────────────
-        center_workspace = tk.Frame(self.root, bg=P["bg_main"], padx=16, pady=0)
-        center_workspace.pack(fill="both", expand=True)
+        self.center_workspace = tk.Frame(self.root, bg=P["bg_main"], padx=16, pady=0)
+        self.center_workspace.pack(side="top", fill="both", expand=True)
 
         # LEFT PANEL: RECORDINGS & SUBJECT TABLE
-        list_outer, list_card, self.lbl_sec1, self.badge_sec1 = self._create_section_card(
-            center_workspace, self.tr("sec1_title"), P["blue"], self.tr("badge_queue")
+        self.list_outer, self.list_card, self.lbl_sec1, self.badge_sec1 = self._create_section_card(
+            self.center_workspace, self.tr("sec1_title"), P["blue"], self.tr("badge_queue")
         )
-        list_outer.pack(side="left", fill="both", expand=True, padx=(0, 8), pady=(0, 8))
+        self.list_outer.pack_propagate(False)
 
-        toolbar = tk.Frame(list_card, bg=P["bg_card"])
-        toolbar.pack(fill="x", pady=(0, 8))
+        self.toolbar = tk.Frame(self.list_card, bg=P["bg_card"])
+        self.toolbar.pack(fill="x", pady=(0, 8))
 
         self.btn_add_vid = ttk.Button(
-            toolbar, text=self.tr("btn_add_vid"), command=self.browse_videos, style="Teal.TButton"
+            self.toolbar, text=self.tr("btn_add_vid"), command=self.browse_videos, style="Teal.TButton"
         )
         self.btn_add_url = ttk.Button(
-            toolbar, text="🌐 URL / Teams", command=self.add_url_or_teams_dialog, style="Primary.TButton"
+            self.toolbar, text="🌐 URL / Teams", command=self.add_url_or_teams_dialog, style="Primary.TButton"
         )
-        self.btn_add_url.pack(side="left", padx=(0, 6))
-        self.btn_add_vid.pack(side="left", padx=(0, 6))
         ToolTip(self.btn_add_vid, lambda: self.tr("tt_add_vid"))
 
         self.btn_edit_id = ttk.Button(
-            toolbar, text=self.tr("btn_edit_id"), command=lambda: self.edit_animal_id(None), style="Ghost.TButton"
+            self.toolbar, text=self.tr("btn_edit_id"), command=lambda: self.edit_animal_id(None), style="Ghost.TButton"
         )
-        self.btn_edit_id.pack(side="left", padx=(0, 6))
         ToolTip(self.btn_edit_id, lambda: self.tr("tt_edit_id"))
 
         self.btn_remove_vid = ttk.Button(
-            toolbar, text=self.tr("btn_remove_vid"), command=self.remove_selected_video, style="SoftRed.TButton"
+            self.toolbar, text=self.tr("btn_remove_vid"), command=self.remove_selected_video, style="SoftRed.TButton"
         )
-        self.btn_remove_vid.pack(side="left", padx=(0, 6))
         ToolTip(self.btn_remove_vid, lambda: self.tr("tt_remove_vid"))
 
         self.btn_clear_vid = ttk.Button(
-            toolbar, text=self.tr("btn_clear_vid"), command=self.clear_videos, style="Ghost.TButton"
+            self.toolbar, text=self.tr("btn_clear_vid"), command=self.clear_videos, style="Ghost.TButton"
         )
-        self.btn_clear_vid.pack(side="right")
         ToolTip(self.btn_clear_vid, lambda: self.tr("tt_clear_vid"))
 
-        tree_container = tk.Frame(list_card, bg=P["border"], padx=1, pady=1)
+        self._apply_toolbar_layout("1row")
+
+        tree_container = tk.Frame(self.list_card, bg=P["border"], padx=1, pady=1)
         tree_container.pack(fill="both", expand=True)
+        tree_container.grid_rowconfigure(0, weight=1)
+        tree_container.grid_columnconfigure(0, weight=1)
 
         columns = ("filename", "animal_id", "status", "path")
-        self.tree = ttk.Treeview(tree_container, columns=columns, show="headings", height=9, selectmode="browse")
+        self.tree = ttk.Treeview(tree_container, columns=columns, show="headings", height=6, selectmode="browse")
         self.tree.heading("filename", text=self.tr("col_fname"))
         self.tree.heading("animal_id", text=self.tr("col_id"))
         self.tree.heading("status", text=self.tr("col_status"))
         self.tree.heading("path", text=self.tr("col_path"))
 
-        self.tree.column("filename", width=210, anchor="w")
-        self.tree.column("animal_id", width=95, anchor="center")
-        self.tree.column("status", width=145, anchor="center")
-        self.tree.column("path", width=260, anchor="w")
-        self.tree.pack(side="left", fill="both", expand=True)
+        self.tree.column("filename", width=180, minwidth=90, anchor="w", stretch=True)
+        self.tree.column("animal_id", width=85, minwidth=60, anchor="center", stretch=False)
+        self.tree.column("status", width=130, minwidth=80, anchor="center", stretch=False)
+        self.tree.column("path", width=220, minwidth=100, anchor="w", stretch=True)
+        self.tree.grid(row=0, column=0, sticky="nsew")
 
         scrollbar = ttk.Scrollbar(tree_container, orient="vertical", command=self.tree.yview)
-        scrollbar.pack(side="right", fill="y")
-        self.tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        xscrollbar = ttk.Scrollbar(tree_container, orient="horizontal", command=self.tree.xview)
+        xscrollbar.grid(row=1, column=0, columnspan=2, sticky="ew")
+        self.tree.configure(yscrollcommand=scrollbar.set, xscrollcommand=xscrollbar.set)
         self.tree.bind("<Double-1>", self.edit_animal_id)
         self.tree.bind("<Return>", self.edit_animal_id)
         self.tree.bind("<KP_Enter>", self.edit_animal_id)
         self.tree.bind("<F2>", self.edit_animal_id)
+        self.tree.bind("<Configure>", self._on_tree_configure)
 
         # RIGHT PANEL: PARAMETERS & EXECUTION DOCK
-        ctrl_outer, control_card, self.lbl_sec2, self.badge_sec2 = self._create_section_card(
-            center_workspace, self.tr("sec2_title"), P["emerald"], self.tr("badge_controls")
+        self.ctrl_outer, self.control_card, self.lbl_sec2, self.badge_sec2 = self._create_section_card(
+            self.center_workspace, self.tr("sec2_title"), P["emerald"], self.tr("badge_controls")
         )
-        ctrl_outer.configure(width=435)
-        ctrl_outer.pack_propagate(False)
-        ctrl_outer.pack(side="right", fill="y", pady=(0, 8))
+        self.ctrl_outer.pack_propagate(False)
 
-        self.lbl_sub_calib = tk.Label(
-            control_card, text=self.tr("sub_calib"), bg=P["bg_card"], fg=P["text_muted"],
-            font=(self.ui_font, 8, "bold")
-        )
-        self.lbl_sub_calib.pack(anchor="w", pady=(0, 4))
+        # Pinned Execution Dock at the bottom of control_card so Start/Stop buttons NEVER get clipped
+        exec_dock = tk.Frame(self.control_card, bg=P["bg_card"])
+        exec_dock.pack(side="bottom", fill="x", pady=(4, 0))
 
-        chk_group = tk.Frame(control_card, bg=P["bg_card"])
-        chk_group.pack(fill="x", pady=(0, 6))
-
-        self.chk_auto_calib = ttk.Checkbutton(
-            chk_group, text=self.tr("chk_auto_calib"), variable=self.var_auto_calib, style="Dark.TCheckbutton"
-        )
-        self.chk_auto_calib.pack(anchor="w", pady=1)
-        ToolTip(self.chk_auto_calib, lambda: self.tr("tt_auto_calib"))
-
-        self.chk_yolo_fusion = ttk.Checkbutton(
-            chk_group, text=self.tr("chk_yolo_fusion"), variable=self.var_yolo_fusion, style="Dark.TCheckbutton"
-        )
-        self.chk_yolo_fusion.pack(anchor="w", pady=1)
-        ToolTip(self.chk_yolo_fusion, lambda: self.tr("tt_yolo"))
-
-        self.chk_lock_lr = ttk.Checkbutton(
-            chk_group, text=self.tr("chk_lock_lr"), variable=self.var_lock_lr_direction, style="Dark.TCheckbutton"
-        )
-        self.chk_lock_lr.pack(anchor="w", pady=1)
-        ToolTip(self.chk_lock_lr, lambda: self.tr("tt_lock_lr"))
-
-        self.chk_bidirectional = ttk.Checkbutton(
-            chk_group, text=self.tr("chk_bidirectional"), variable=self.var_bidirectional, style="Dark.TCheckbutton"
-        )
-        self.chk_bidirectional.pack(anchor="w", pady=1)
-        ToolTip(self.chk_bidirectional, lambda: self.tr("tt_bidirectional"))
-
-        self.chk_rev = ttk.Checkbutton(
-            chk_group, text=self.tr("chk_rev"), variable=self.var_enable_review, style="Dark.TCheckbutton"
-        )
-        self.chk_rev.pack(anchor="w", pady=1)
-        ToolTip(self.chk_rev, lambda: self.tr("tt_rev"))
-
-        tk.Frame(control_card, bg=P["border"], height=1).pack(fill="x", pady=(4, 6))
-
-        self.lbl_sub_params = tk.Label(
-            control_card, text=self.tr("sub_params"), bg=P["bg_card"], fg=P["text_muted"],
-            font=(self.ui_font, 8, "bold")
-        )
-        self.lbl_sub_params.pack(anchor="w", pady=(0, 4))
-
-        param_grid = tk.Frame(
-            control_card, bg=P["bg_panel"], padx=10, pady=8,
-            highlightthickness=1, highlightbackground=P["border"]
-        )
-        param_grid.pack(fill="x", pady=(0, 8))
-        param_grid.columnconfigure(0, weight=1)
-        param_grid.columnconfigure(2, weight=1)
-
-        self.lbl_gatecm = tk.Label(
-            param_grid, text=self.tr("lbl_gatecm"), bg=P["bg_panel"], fg=P["text_main"], font=(self.ui_font, 9)
-        )
-        self.lbl_gatecm.grid(row=0, column=0, sticky="w", pady=(0, 6))
-        self.spin_gate_cm = tk.Spinbox(
-            param_grid, from_=5.0, to=500.0, increment=1.0, textvariable=self.var_gate_cm, width=6,
-            font=(self.mono_font, 9, "bold"), bg=P["bg_main"], fg=P["text_main"],
-            insertbackground=P["text_main"], buttonbackground=P["border"], relief="flat",
-            highlightthickness=1, highlightbackground=P["border"]
-        )
-        self.spin_gate_cm.grid(row=0, column=1, sticky="e", padx=(4, 12), pady=(0, 6))
-        ToolTip(self.spin_gate_cm, lambda: self.tr("tt_gatecm"))
-
-        self.lbl_cooldown_main = tk.Label(
-            param_grid, text=self.tr("lbl_cooldown"), bg=P["bg_panel"], fg=P["text_main"], font=(self.ui_font, 9)
-        )
-        self.lbl_cooldown_main.grid(row=0, column=2, sticky="w", pady=(0, 6))
-        self.spin_cooldown_main = tk.Spinbox(
-            param_grid, from_=0.10, to=5.0, increment=0.05, textvariable=self.var_cooldown, width=6,
-            font=(self.mono_font, 9, "bold"), bg=P["bg_main"], fg=P["cyan"],
-            insertbackground=P["text_main"], buttonbackground=P["border"], relief="flat",
-            highlightthickness=1, highlightbackground=P["border"]
-        )
-        self.spin_cooldown_main.grid(row=0, column=3, sticky="e", padx=(4, 0), pady=(0, 6))
-        ToolTip(self.spin_cooldown_main, lambda: self.tr("tt_cooldown"))
-
-        self.lbl_mindist_main = tk.Label(
-            param_grid, text=self.tr("lbl_mindist"), bg=P["bg_panel"], fg=P["text_main"], font=(self.ui_font, 9)
-        )
-        self.lbl_mindist_main.grid(row=1, column=0, sticky="w")
-        self.spin_mindist_main = tk.Spinbox(
-            param_grid, from_=0, to=200, increment=5, textvariable=self.var_min_dist, width=6,
-            font=(self.mono_font, 9, "bold"), bg=P["bg_main"], fg=P["text_main"],
-            insertbackground=P["text_main"], buttonbackground=P["border"], relief="flat",
-            highlightthickness=1, highlightbackground=P["border"]
-        )
-        self.spin_mindist_main.grid(row=1, column=1, sticky="e", padx=(4, 12))
-        ToolTip(self.spin_mindist_main, lambda: self.tr("tt_mindist"))
-
-        self.lbl_threads_main = tk.Label(
-            param_grid, text=self.tr("lbl_threads"), bg=P["bg_panel"], fg=P["text_main"], font=(self.ui_font, 9)
-        )
-        self.lbl_threads_main.grid(row=1, column=2, sticky="w")
-        self.spin_threads_main = tk.Spinbox(
-            param_grid, from_=1, to=16, increment=1, textvariable=self.var_threads, width=6,
-            font=(self.mono_font, 9, "bold"), bg=P["bg_main"], fg=P["text_main"],
-            insertbackground=P["text_main"], buttonbackground=P["border"], relief="flat",
-            highlightthickness=1, highlightbackground=P["border"]
-        )
-        self.spin_threads_main.grid(row=1, column=3, sticky="e", padx=(4, 0))
-        ToolTip(self.spin_threads_main, lambda: self.tr("tt_threads"))
-
-        prof_row1 = tk.Frame(control_card, bg=P["bg_card"])
-        prof_row1.pack(fill="x", pady=(0, 4))
-
-        self.btn_load_prof_main = ttk.Button(
-            prof_row1, text=self.tr("btn_load_prof"), command=self.load_calibration_json, style="Ghost.TButton"
-        )
-        self.btn_load_prof_main.pack(side="left", fill="x", expand=True, padx=(0, 3))
-        ToolTip(self.btn_load_prof_main, lambda: self.tr("tt_load_prof"))
-
-        self.btn_save_prof_main = ttk.Button(
-            prof_row1, text=self.tr("btn_save_prof"), command=self.save_calibration_json, style="Ghost.TButton"
-        )
-        self.btn_save_prof_main.pack(side="right", fill="x", expand=True, padx=(3, 0))
-        ToolTip(self.btn_save_prof_main, lambda: self.tr("tt_save_prof"))
-
-        prof_row2 = tk.Frame(control_card, bg=P["bg_card"])
-        prof_row2.pack(fill="x", pady=(0, 8))
-
-        self.btn_train_ai = ttk.Button(
-            prof_row2, text=self.tr("btn_train_ai"), command=self.train_ai_pose_from_gui, style="Primary.TButton"
-        )
-        self.btn_train_ai.pack(side="left", fill="x", expand=True, padx=(0, 3))
-        ToolTip(self.btn_train_ai, lambda: self.tr("tt_train_ai"))
-
-        self.btn_settings = ttk.Button(
-            prof_row2, text=self.tr("btn_settings"), command=self.open_advanced_settings_dialog, style="Ghost.TButton"
-        )
-        self.btn_settings.pack(side="right", fill="x", expand=True, padx=(3, 0))
-        ToolTip(self.btn_settings, lambda: self.tr("tt_settings"))
-
-        tk.Frame(control_card, bg=P["border"], height=1).pack(fill="x", pady=(0, 8))
+        tk.Frame(exec_dock, bg=P["border"], height=1).pack(fill="x", pady=(0, 6))
 
         self.lbl_sub_exec = tk.Label(
-            control_card, text=self.tr("sub_exec"), bg=P["bg_card"], fg=P["text_muted"],
+            exec_dock, text=self.tr("sub_exec"), bg=P["bg_card"], fg=P["text_muted"],
             font=(self.ui_font, 8, "bold")
         )
-        self.lbl_sub_exec.pack(anchor="w", pady=(0, 6))
+        self.lbl_sub_exec.pack(anchor="w", pady=(0, 4))
 
         self.btn_start = ttk.Button(
-            control_card, text=self.tr("btn_start"), command=self.start_workflow, style="Emerald.TButton"
+            exec_dock, text=self.tr("btn_start"), command=self.start_workflow, style="Emerald.TButton"
         )
-        self.btn_start.pack(fill="x", pady=(0, 6))
+        self.btn_start.pack(fill="x", pady=(0, 5))
         ToolTip(self.btn_start, lambda: self.tr("tt_start"))
 
-        exec_sub_row = tk.Frame(control_card, bg=P["bg_card"])
+        exec_sub_row = tk.Frame(exec_dock, bg=P["bg_card"])
         exec_sub_row.pack(fill="x")
 
         self.btn_quick_start = ttk.Button(
@@ -4195,67 +4136,426 @@ class PerVideoIDTrackerApp:
         self.btn_stop.pack(side="right")
         ToolTip(self.btn_stop, lambda: self.tr("tt_stop"))
 
-        # ── 4. STATUS, PROGRESS & DIAGNOSTIC LOG ────────────────────────────
-        bottom_frame = tk.Frame(self.root, bg=P["bg_main"], padx=16, pady=0)
-        bottom_frame.pack(fill="x", pady=(0, 12))
+        # Scrollable upper parameters area inside control_card (adapts seamlessly to any height/mode)
+        ctrl_scroll_wrap = tk.Frame(self.control_card, bg=P["bg_card"])
+        ctrl_scroll_wrap.pack(side="top", fill="both", expand=True)
 
-        log_outer, log_card, self.lbl_sec3, self.badge_sec3 = self._create_section_card(
-            bottom_frame, self.tr("sec3_title"), P["blue"], self.tr("badge_log")
+        self.ctrl_canvas = tk.Canvas(
+            ctrl_scroll_wrap, bg=P["bg_card"], bd=0, highlightthickness=0, yscrollincrement=16
         )
-        log_outer.pack(fill="x")
+        self.ctrl_vscroll = ttk.Scrollbar(ctrl_scroll_wrap, orient="vertical", command=self.ctrl_canvas.yview)
+        self.ctrl_canvas.configure(yscrollcommand=self.ctrl_vscroll.set)
+        self.ctrl_canvas.pack(side="left", fill="both", expand=True)
 
-        prog_strip = tk.Frame(
-            log_card, bg=P["bg_panel"], padx=10, pady=6,
+        self.ctrl_inner = tk.Frame(self.ctrl_canvas, bg=P["bg_card"])
+        self._ctrl_canvas_win = self.ctrl_canvas.create_window((0, 0), window=self.ctrl_inner, anchor="nw")
+
+        def _sync_ctrl_scroll(event=None):
+            if not self.ctrl_canvas.winfo_exists():
+                return
+            cw = max(180, self.ctrl_canvas.winfo_width())
+            ch = max(80, self.ctrl_canvas.winfo_height())
+            self.ctrl_canvas.itemconfigure(self._ctrl_canvas_win, width=cw)
+            req_h = self.ctrl_inner.winfo_reqheight()
+            self.ctrl_canvas.configure(scrollregion=(0, 0, cw, max(ch, req_h)))
+            if req_h > ch + 4:
+                if not self.ctrl_vscroll.winfo_ismapped():
+                    self.ctrl_vscroll.pack(side="right", fill="y", padx=(4, 0))
+            else:
+                if self.ctrl_vscroll.winfo_ismapped():
+                    self.ctrl_vscroll.pack_forget()
+            self._update_ctrl_internal_responsiveness(cw)
+
+        self.ctrl_canvas.bind("<Configure>", _sync_ctrl_scroll)
+        self.ctrl_inner.bind("<Configure>", _sync_ctrl_scroll)
+
+        self.lbl_sub_calib = tk.Label(
+            self.ctrl_inner, text=self.tr("sub_calib"), bg=P["bg_card"], fg=P["text_muted"],
+            font=(self.ui_font, 8, "bold")
+        )
+        self.lbl_sub_calib.pack(anchor="w", pady=(0, 4))
+
+        chk_group = tk.Frame(self.ctrl_inner, bg=P["bg_card"])
+        chk_group.pack(fill="x", pady=(0, 6))
+
+        self.chk_auto_calib = ttk.Checkbutton(
+            chk_group, text=self.tr("chk_auto_calib"), variable=self.var_auto_calib, style="Dark.TCheckbutton"
+        )
+        self.chk_auto_calib.pack(anchor="w", fill="x", pady=1)
+        ToolTip(self.chk_auto_calib, lambda: self.tr("tt_auto_calib"))
+
+        self.chk_yolo_fusion = ttk.Checkbutton(
+            chk_group, text=self.tr("chk_yolo_fusion"), variable=self.var_yolo_fusion, style="Dark.TCheckbutton"
+        )
+        self.chk_yolo_fusion.pack(anchor="w", fill="x", pady=1)
+        ToolTip(self.chk_yolo_fusion, lambda: self.tr("tt_yolo"))
+
+        self.chk_lock_lr = ttk.Checkbutton(
+            chk_group, text=self.tr("chk_lock_lr"), variable=self.var_lock_lr_direction, style="Dark.TCheckbutton"
+        )
+        self.chk_lock_lr.pack(anchor="w", fill="x", pady=1)
+        ToolTip(self.chk_lock_lr, lambda: self.tr("tt_lock_lr"))
+
+        self.chk_bidirectional = ttk.Checkbutton(
+            chk_group, text=self.tr("chk_bidirectional"), variable=self.var_bidirectional, style="Dark.TCheckbutton"
+        )
+        self.chk_bidirectional.pack(anchor="w", fill="x", pady=1)
+        ToolTip(self.chk_bidirectional, lambda: self.tr("tt_bidirectional"))
+
+        self.chk_rev = ttk.Checkbutton(
+            chk_group, text=self.tr("chk_rev"), variable=self.var_enable_review, style="Dark.TCheckbutton"
+        )
+        self.chk_rev.pack(anchor="w", fill="x", pady=1)
+        ToolTip(self.chk_rev, lambda: self.tr("tt_rev"))
+
+        tk.Frame(self.ctrl_inner, bg=P["border"], height=1).pack(fill="x", pady=(4, 6))
+
+        self.lbl_sub_params = tk.Label(
+            self.ctrl_inner, text=self.tr("sub_params"), bg=P["bg_card"], fg=P["text_muted"],
+            font=(self.ui_font, 8, "bold")
+        )
+        self.lbl_sub_params.pack(anchor="w", pady=(0, 4))
+
+        self.param_grid = tk.Frame(
+            self.ctrl_inner, bg=P["bg_panel"], padx=10, pady=8,
             highlightthickness=1, highlightbackground=P["border"]
         )
-        prog_strip.pack(fill="x", pady=(0, 6))
+        self.param_grid.pack(fill="x", pady=(0, 8))
 
-        self.progress_lbl = tk.Label(
-            prog_strip, text=self.tr("prog_idle", done=0, total=0),
-            bg=P["bg_panel"], fg=P["text_main"], font=(self.ui_font, 9, "bold")
+        self.lbl_gatecm = tk.Label(
+            self.param_grid, text=self.tr("lbl_gatecm"), bg=P["bg_panel"], fg=P["text_main"], font=(self.ui_font, 9)
         )
-        self.progress_lbl.pack(anchor="w", pady=(0, 4))
-
-        self.progress_bar = ttk.Progressbar(
-            prog_strip, style="Emerald.Horizontal.TProgressbar", mode="determinate"
+        self.spin_gate_cm = tk.Spinbox(
+            self.param_grid, from_=5.0, to=500.0, increment=1.0, textvariable=self.var_gate_cm, width=6,
+            font=(self.mono_font, 9, "bold"), bg=P["bg_main"], fg=P["text_main"],
+            insertbackground=P["text_main"], buttonbackground=P["border"], relief="flat",
+            highlightthickness=1, highlightbackground=P["border"]
         )
-        self.progress_bar.pack(fill="x")
+        ToolTip(self.spin_gate_cm, lambda: self.tr("tt_gatecm"))
 
-        log_border = tk.Frame(log_card, bg=P["border"], padx=1, pady=1)
-        log_border.pack(fill="both", expand=True)
-
-        self.log_area = scrolledtext.ScrolledText(
-            log_border, wrap=tk.WORD, font=(self.mono_font, 9),
-            height=5, state="disabled", bg="#080C14", fg="#E2E8F0",
-            insertbackground=P["cyan"], relief="flat", borderwidth=0, padx=8, pady=6
+        self.lbl_cooldown_main = tk.Label(
+            self.param_grid, text=self.tr("lbl_cooldown"), bg=P["bg_panel"], fg=P["text_main"], font=(self.ui_font, 9)
         )
-        self.log_area.pack(fill="both", expand=True)
+        self.spin_cooldown_main = tk.Spinbox(
+            self.param_grid, from_=0.10, to=5.0, increment=0.05, textvariable=self.var_cooldown, width=6,
+            font=(self.mono_font, 9, "bold"), bg=P["bg_main"], fg=P["cyan"],
+            insertbackground=P["text_main"], buttonbackground=P["border"], relief="flat",
+            highlightthickness=1, highlightbackground=P["border"]
+        )
+        ToolTip(self.spin_cooldown_main, lambda: self.tr("tt_cooldown"))
+
+        self.lbl_mindist_main = tk.Label(
+            self.param_grid, text=self.tr("lbl_mindist"), bg=P["bg_panel"], fg=P["text_main"], font=(self.ui_font, 9)
+        )
+        self.spin_mindist_main = tk.Spinbox(
+            self.param_grid, from_=0, to=200, increment=5, textvariable=self.var_min_dist, width=6,
+            font=(self.mono_font, 9, "bold"), bg=P["bg_main"], fg=P["text_main"],
+            insertbackground=P["text_main"], buttonbackground=P["border"], relief="flat",
+            highlightthickness=1, highlightbackground=P["border"]
+        )
+        ToolTip(self.spin_mindist_main, lambda: self.tr("tt_mindist"))
+
+        self.lbl_threads_main = tk.Label(
+            self.param_grid, text=self.tr("lbl_threads"), bg=P["bg_panel"], fg=P["text_main"], font=(self.ui_font, 9)
+        )
+        self.spin_threads_main = tk.Spinbox(
+            self.param_grid, from_=1, to=16, increment=1, textvariable=self.var_threads, width=6,
+            font=(self.mono_font, 9, "bold"), bg=P["bg_main"], fg=P["text_main"],
+            insertbackground=P["text_main"], buttonbackground=P["border"], relief="flat",
+            highlightthickness=1, highlightbackground=P["border"]
+        )
+        ToolTip(self.spin_threads_main, lambda: self.tr("tt_threads"))
+
+        self._apply_param_grid_layout("2col")
+
+        prof_row1 = tk.Frame(self.ctrl_inner, bg=P["bg_card"])
+        prof_row1.pack(fill="x", pady=(0, 4))
+        prof_row1.grid_columnconfigure(0, weight=1, uniform="prof1")
+        prof_row1.grid_columnconfigure(1, weight=1, uniform="prof1")
+
+        self.btn_load_prof_main = ttk.Button(
+            prof_row1, text=self.tr("btn_load_prof"), command=self.load_calibration_json, style="Ghost.TButton"
+        )
+        self.btn_load_prof_main.grid(row=0, column=0, sticky="ew", padx=(0, 3))
+        ToolTip(self.btn_load_prof_main, lambda: self.tr("tt_load_prof"))
+
+        self.btn_save_prof_main = ttk.Button(
+            prof_row1, text=self.tr("btn_save_prof"), command=self.save_calibration_json, style="Ghost.TButton"
+        )
+        self.btn_save_prof_main.grid(row=0, column=1, sticky="ew", padx=(3, 0))
+        ToolTip(self.btn_save_prof_main, lambda: self.tr("tt_save_prof"))
+
+        prof_row2 = tk.Frame(self.ctrl_inner, bg=P["bg_card"])
+        prof_row2.pack(fill="x", pady=(0, 4))
+        prof_row2.grid_columnconfigure(0, weight=1, uniform="prof2")
+        prof_row2.grid_columnconfigure(1, weight=1, uniform="prof2")
+
+        self.btn_train_ai = ttk.Button(
+            prof_row2, text=self.tr("btn_train_ai"), command=self.train_ai_pose_from_gui, style="Primary.TButton"
+        )
+        self.btn_train_ai.grid(row=0, column=0, sticky="ew", padx=(0, 3))
+        ToolTip(self.btn_train_ai, lambda: self.tr("tt_train_ai"))
+
+        self.btn_settings = ttk.Button(
+            prof_row2, text=self.tr("btn_settings"), command=self.open_advanced_settings_dialog, style="Ghost.TButton"
+        )
+        self.btn_settings.grid(row=0, column=1, sticky="ew", padx=(3, 0))
+        ToolTip(self.btn_settings, lambda: self.tr("tt_settings"))
+
+        # Initial workspace layout & responsive event binding
+        self._apply_workspace_layout("split", 1260)
+        self.root.bind("<Configure>", self._on_root_configure)
 
         self.log(
             f"[{APP_NAME} v{APP_VERSION}] Ready. Continuous 100% movement capture, bidirectional crossing analysis, and non-blocking preview active."
         )
 
+    def _apply_kpi_layout(self, mode):
+        if self._kpi_mode == mode:
+            return
+        self._kpi_mode = mode
+        for w in self.kpi_card_wraps:
+            w.grid_forget()
+
+        if mode == "4col":
+            for c in range(4):
+                self.kpi_strip.grid_columnconfigure(c, weight=1, uniform="kpi_col")
+            self.kpi_strip.grid_rowconfigure(0, weight=0)
+            self.kpi_strip.grid_rowconfigure(1, weight=0)
+            for idx, w in enumerate(self.kpi_card_wraps):
+                w.grid(row=0, column=idx, sticky="nsew", padx=(0 if idx == 0 else 8, 0), pady=0)
+        else:
+            self.kpi_strip.grid_columnconfigure(0, weight=1, uniform="kpi_col")
+            self.kpi_strip.grid_columnconfigure(1, weight=1, uniform="kpi_col")
+            self.kpi_strip.grid_columnconfigure(2, weight=0, uniform="")
+            self.kpi_strip.grid_columnconfigure(3, weight=0, uniform="")
+            for idx, w in enumerate(self.kpi_card_wraps):
+                r, c = divmod(idx, 2)
+                w.grid(row=r, column=c, sticky="nsew", padx=(0 if c == 0 else 8, 0), pady=(0 if r == 0 else 6, 0))
+
+    def _apply_toolbar_layout(self, mode):
+        if self._toolbar_mode == mode:
+            return
+        self._toolbar_mode = mode
+        for b in (self.btn_add_url, self.btn_add_vid, self.btn_edit_id, self.btn_remove_vid, self.btn_clear_vid):
+            b.grid_forget()
+
+        if mode == "1row":
+            for c in range(6):
+                self.toolbar.grid_columnconfigure(c, weight=1 if c == 4 else 0, uniform="")
+            self.btn_add_url.grid(row=0, column=0, sticky="w", padx=(0, 6), pady=0)
+            self.btn_add_vid.grid(row=0, column=1, sticky="w", padx=(0, 6), pady=0)
+            self.btn_edit_id.grid(row=0, column=2, sticky="w", padx=(0, 6), pady=0)
+            self.btn_remove_vid.grid(row=0, column=3, sticky="w", padx=(0, 6), pady=0)
+            self.btn_clear_vid.grid(row=0, column=5, sticky="e", padx=0, pady=0)
+        else:
+            for c in range(3):
+                self.toolbar.grid_columnconfigure(c, weight=1, uniform="tb_col")
+            for c in range(3, 6):
+                self.toolbar.grid_columnconfigure(c, weight=0, uniform="")
+            self.btn_add_url.grid(row=0, column=0, sticky="ew", padx=(0, 4), pady=(0, 4))
+            self.btn_add_vid.grid(row=0, column=1, sticky="ew", padx=2, pady=(0, 4))
+            self.btn_edit_id.grid(row=0, column=2, sticky="ew", padx=(4, 0), pady=(0, 4))
+            self.btn_remove_vid.grid(row=1, column=0, columnspan=2, sticky="ew", padx=(0, 4), pady=0)
+            self.btn_clear_vid.grid(row=1, column=2, sticky="ew", padx=(4, 0), pady=0)
+
+    def _apply_param_grid_layout(self, mode):
+        if self._param_grid_mode == mode:
+            return
+        self._param_grid_mode = mode
+        for w in (
+            self.lbl_gatecm, self.spin_gate_cm,
+            self.lbl_cooldown_main, self.spin_cooldown_main,
+            self.lbl_mindist_main, self.spin_mindist_main,
+            self.lbl_threads_main, self.spin_threads_main,
+        ):
+            w.grid_forget()
+
+        if mode == "2col":
+            self.param_grid.grid_columnconfigure(0, weight=1)
+            self.param_grid.grid_columnconfigure(1, weight=0)
+            self.param_grid.grid_columnconfigure(2, weight=1)
+            self.param_grid.grid_columnconfigure(3, weight=0)
+            self.lbl_gatecm.grid(row=0, column=0, sticky="w", pady=(0, 6))
+            self.spin_gate_cm.grid(row=0, column=1, sticky="e", padx=(4, 12), pady=(0, 6))
+            self.lbl_cooldown_main.grid(row=0, column=2, sticky="w", pady=(0, 6))
+            self.spin_cooldown_main.grid(row=0, column=3, sticky="e", padx=(4, 0), pady=(0, 6))
+            self.lbl_mindist_main.grid(row=1, column=0, sticky="w")
+            self.spin_mindist_main.grid(row=1, column=1, sticky="e", padx=(4, 12))
+            self.lbl_threads_main.grid(row=1, column=2, sticky="w")
+            self.spin_threads_main.grid(row=1, column=3, sticky="e", padx=(4, 0))
+        else:
+            self.param_grid.grid_columnconfigure(0, weight=1)
+            self.param_grid.grid_columnconfigure(1, weight=0)
+            self.param_grid.grid_columnconfigure(2, weight=0)
+            self.param_grid.grid_columnconfigure(3, weight=0)
+            pairs = [
+                (self.lbl_gatecm, self.spin_gate_cm),
+                (self.lbl_cooldown_main, self.spin_cooldown_main),
+                (self.lbl_mindist_main, self.spin_mindist_main),
+                (self.lbl_threads_main, self.spin_threads_main),
+            ]
+            for idx, (lbl_w, sp_w) in enumerate(pairs):
+                pad_b = (0, 4) if idx < 3 else (0, 0)
+                lbl_w.grid(row=idx, column=0, sticky="w", pady=pad_b)
+                sp_w.grid(row=idx, column=1, sticky="e", padx=(8, 0), pady=pad_b)
+
+    def _update_ctrl_internal_responsiveness(self, ctrl_inner_w):
+        if self._param_grid_mode == "2col" and ctrl_inner_w < 335:
+            self._apply_param_grid_layout("1col")
+        elif self._param_grid_mode == "1col" and ctrl_inner_w >= 350:
+            self._apply_param_grid_layout("2col")
+
+        wrap_px = max(180, ctrl_inner_w - 28)
+        if abs(wrap_px - self._last_ctrl_wrap) >= 10:
+            self._last_ctrl_wrap = wrap_px
+            style = ttk.Style()
+            style.configure("Dark.TCheckbutton", wraplength=wrap_px)
+
+    def _apply_workspace_layout(self, mode, win_w):
+        ctrl_w = min(435, max(350, int(win_w * 0.36)))
+        if self._workspace_mode != mode:
+            self._workspace_mode = mode
+            self.list_outer.grid_forget()
+            self.ctrl_outer.grid_forget()
+
+            if mode == "split":
+                self.center_workspace.grid_rowconfigure(0, weight=1, minsize=200)
+                self.center_workspace.grid_rowconfigure(1, weight=0, minsize=0)
+                self.center_workspace.grid_columnconfigure(0, weight=1, minsize=340)
+                self.center_workspace.grid_columnconfigure(1, weight=0, minsize=ctrl_w)
+                self.ctrl_outer.configure(width=ctrl_w)
+                self.list_outer.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=(0, 8))
+                self.ctrl_outer.grid(row=0, column=1, sticky="nsew", padx=0, pady=(0, 8))
+            else:
+                self.center_workspace.grid_rowconfigure(0, weight=5, minsize=165)
+                self.center_workspace.grid_rowconfigure(1, weight=6, minsize=210)
+                self.center_workspace.grid_columnconfigure(0, weight=1, minsize=260)
+                self.center_workspace.grid_columnconfigure(1, weight=0, minsize=0)
+                self.ctrl_outer.configure(width=max(280, win_w - 32))
+                self.list_outer.grid(row=0, column=0, sticky="nsew", padx=0, pady=(0, 8))
+                self.ctrl_outer.grid(row=1, column=0, sticky="nsew", padx=0, pady=(0, 8))
+        elif mode == "split":
+            cur_min = self.center_workspace.grid_columnconfigure(1).get("minsize", 0)
+            if abs(ctrl_w - cur_min) >= 6:
+                self.center_workspace.grid_columnconfigure(1, weight=0, minsize=ctrl_w)
+                self.ctrl_outer.configure(width=ctrl_w)
+
+    def _on_tree_configure(self, event=None):
+        if not hasattr(self, "tree") or not self.tree.winfo_exists():
+            return
+        tw = self.tree.winfo_width()
+        if tw <= 50:
+            return
+        if abs(tw - self._last_tree_w) >= 4:
+            self._last_tree_w = tw
+            avail = max(310, tw - 4)
+            w_id = max(65, min(95, int(avail * 0.14)))
+            w_st = max(90, min(145, int(avail * 0.21)))
+            w_fn = max(110, int(avail * 0.31))
+            w_pt = max(100, avail - w_id - w_st - w_fn)
+            self.tree.column("filename", width=w_fn)
+            self.tree.column("animal_id", width=w_id)
+            self.tree.column("status", width=w_st)
+            self.tree.column("path", width=w_pt)
+
+        # Keep inline Subject ID editor aligned if open during resize
+        if self._inline_id_entry and self._inline_id_entry.winfo_exists() and self._inline_id_uid:
+            bbox = self.tree.bbox(self._inline_id_uid, "animal_id")
+            if bbox and bbox[2] > 0:
+                x, y, w, h = bbox
+                self._inline_id_entry.place(x=x, y=max(0, y - 2), width=w, height=max(24, h + 4))
+
+    def _on_root_configure(self, event=None):
+        if event is not None and event.widget is not self.root:
+            return
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        if w <= 100 or h <= 100:
+            return
+        if abs(w - self._last_root_size[0]) < 3 and abs(h - self._last_root_size[1]) < 3:
+            return
+        self._last_root_size = (w, h)
+        if self._resp_after_id is not None:
+            try:
+                self.root.after_cancel(self._resp_after_id)
+            except tk.TclError:
+                pass
+        self._resp_after_id = self.root.after(12, lambda: self._apply_responsive_root(w, h))
+
+    def _apply_responsive_root(self, w, h):
+        self._resp_after_id = None
+        if not self.root.winfo_exists():
+            return
+
+        # 1. Header subtitle visibility & output path truncation
+        if self._subtitle_visible and w < 860:
+            self._subtitle_visible = False
+            self.header_sep.pack_forget()
+            self.lbl_subtitle.pack_forget()
+        elif not self._subtitle_visible and w >= 890:
+            self._subtitle_visible = True
+            self.header_sep.pack(side="left", padx=(0, 10))
+            self.lbl_subtitle.pack(side="left", fill="x", expand=True)
+
+        max_path_chars = max(32, int((w - 310) / 7.2))
+        self.lbl_output_dir.config(text=self._format_output_dir_text(max_path_chars))
+
+        # 2. KPI Strip reflow (4 columns vs 2x2 grid with hysteresis)
+        if self._kpi_mode == "4col" and w < 830:
+            self._apply_kpi_layout("2x2")
+        elif self._kpi_mode == "2x2" and w >= 860:
+            self._apply_kpi_layout("4col")
+
+        # 3. Central Workspace reflow (Split vs Stacked with hysteresis)
+        target_ws = self._workspace_mode or "split"
+        if target_ws == "split" and w < 880:
+            target_ws = "stacked"
+        elif target_ws == "stacked" and w >= 910:
+            target_ws = "split"
+        self._apply_workspace_layout(target_ws, w)
+
+        # 4. Left Panel Toolbar reflow (1 row vs 2 rows based on available list card width)
+        list_avail_w = (w - 32) if target_ws == "stacked" else (w - min(435, max(350, int(w * 0.36))) - 48)
+        if self._toolbar_mode == "1row" and list_avail_w < 740:
+            self._apply_toolbar_layout("2row")
+        elif self._toolbar_mode == "2row" and list_avail_w >= 770:
+            self._apply_toolbar_layout("1row")
+
+        # 5. Diagnostic log height adaptation for compact vertical screens
+        target_log_h = 3 if h < 680 else (4 if h < 760 else 5)
+        if int(self.log_area.cget("height")) != target_log_h:
+            self.log_area.config(height=target_log_h)
 
     def open_advanced_settings_dialog(self):
         P = self.PALETTE
         win = tk.Toplevel(self.root)
         win.title(self.tr("settings_title"))
-        win.geometry("680x450")
+        win.geometry("680x480")
+        win.minsize(500, 420)
         win.configure(bg=P["bg_card"])
-        win.resizable(False, False)
+        win.resizable(True, True)
         win.transient(self.root)
         win.grab_set()
 
-        container = tk.Frame(win, bg=P["bg_card"], padx=22, pady=18)
+        container = tk.Frame(win, bg=P["bg_card"], padx=22, pady=16)
         container.pack(fill="both", expand=True)
+
+        # Pack bottom button bar FIRST at side="bottom" so it is never clipped
+        bottom_row = tk.Frame(container, bg=P["bg_card"])
+        bottom_row.pack(side="bottom", fill="x", pady=(8, 0))
+
+        ttk.Button(bottom_row, text=self.tr("btn_load_prof"), command=self.load_calibration_json, style="Ghost.TButton").pack(side="left", padx=(0, 8))
+        ttk.Button(bottom_row, text=self.tr("btn_save_prof"), command=self.save_calibration_json, style="Ghost.TButton").pack(side="left")
+        ttk.Button(bottom_row, text=self.tr("btn_close_settings"), command=win.destroy, style="Emerald.TButton").pack(side="right")
 
         tk.Label(
             container, text=self.tr("settings_title"),
             bg=P["bg_card"], fg=P["text_main"], font=(self.ui_font, 11, "bold")
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(side="top", anchor="w", pady=(0, 10))
 
         chk_panel = tk.Frame(container, bg=P["bg_panel"], padx=14, pady=10, highlightthickness=1, highlightbackground=P["border"])
-        chk_panel.pack(fill="x", pady=(0, 12))
+        chk_panel.pack(side="top", fill="x", pady=(0, 12))
 
         for tr_key, var in [
             ("chk_yolo_fusion", self.var_yolo_fusion),
@@ -4277,11 +4577,13 @@ class PerVideoIDTrackerApp:
             cb.pack(fill="x", pady=2)
 
         num_panel = tk.Frame(container, bg=P["bg_main"], padx=14, pady=10, highlightthickness=1, highlightbackground=P["border"])
-        num_panel.pack(fill="x", pady=(0, 14))
+        num_panel.pack(side="top", fill="x", pady=(0, 6))
+        for c in range(3):
+            num_panel.grid_columnconfigure(c, weight=1, uniform="adv_num")
 
-        def add_spin_item(parent, tr_key, var, from_, to_, inc, width=5):
+        def add_spin_item_grid(parent, r, c, tr_key, var, from_, to_, inc, width=6):
             box = tk.Frame(parent, bg=P["bg_main"])
-            box.pack(side="left", padx=(0, 14))
+            box.grid(row=r, column=c, sticky="ew", padx=(0, 10), pady=4)
             tk.Label(box, text=self.tr(tr_key), bg=P["bg_main"], fg=P["text_muted"], font=(self.ui_font, 8, "bold")).pack(anchor="w")
             sp = tk.Spinbox(
                 box, from_=from_, to=to_, increment=inc, textvariable=var, width=width,
@@ -4290,29 +4592,23 @@ class PerVideoIDTrackerApp:
             )
             sp.pack(anchor="w", pady=(2, 0))
 
-        add_spin_item(num_panel, "lbl_runs_target", self.var_protocol_runs, 1, 10, 1, width=3)
-        add_spin_item(num_panel, "lbl_threads", self.var_threads, 1, 16, 1, width=4)
-        add_spin_item(num_panel, "lbl_stride", self.var_stride, 1, 5, 1, width=4)
-        add_spin_item(num_panel, "lbl_cooldown", self.var_cooldown, 0.05, 5.0, 0.05, width=6)
-        add_spin_item(num_panel, "lbl_mindist", self.var_min_dist, 0, 200, 5, width=5)
+        add_spin_item_grid(num_panel, 0, 0, "lbl_runs_target", self.var_protocol_runs, 1, 10, 1, width=5)
+        add_spin_item_grid(num_panel, 0, 1, "lbl_threads", self.var_threads, 1, 16, 1, width=5)
+        add_spin_item_grid(num_panel, 0, 2, "lbl_stride", self.var_stride, 1, 5, 1, width=5)
+        add_spin_item_grid(num_panel, 1, 0, "lbl_cooldown", self.var_cooldown, 0.05, 5.0, 0.05, width=6)
+        add_spin_item_grid(num_panel, 1, 1, "lbl_mindist", self.var_min_dist, 0, 200, 5, width=6)
 
         dec_box = tk.Frame(num_panel, bg=P["bg_main"])
-        dec_box.pack(side="left")
+        dec_box.grid(row=1, column=2, sticky="ew", padx=(0, 10), pady=4)
         tk.Label(dec_box, text=self.tr("lbl_dec"), bg=P["bg_main"], fg=P["text_muted"], font=(self.ui_font, 8, "bold")).pack(anchor="w")
-        combo_dec = ttk.Combobox(dec_box, textvariable=self.var_decimal, values=[". (OriginPro)", ", (HU Excel)"], width=12, state="readonly")
+        combo_dec = ttk.Combobox(dec_box, textvariable=self.var_decimal, values=[". (OriginPro)", ", (HU Excel)"], width=13, state="readonly")
         combo_dec.pack(anchor="w", pady=(2, 0))
-
-        bottom_row = tk.Frame(container, bg=P["bg_card"])
-        bottom_row.pack(fill="x")
-
-        ttk.Button(bottom_row, text=self.tr("btn_load_prof"), command=self.load_calibration_json, style="Ghost.TButton").pack(side="left", padx=(0, 8))
-        ttk.Button(bottom_row, text=self.tr("btn_save_prof"), command=self.save_calibration_json, style="Ghost.TButton").pack(side="left")
-        ttk.Button(bottom_row, text=self.tr("btn_close_settings"), command=win.destroy, style="Emerald.TButton").pack(side="right")
 
     def _update_ui_texts(self):
         self.root.title(self.tr("app_window_title", app_name=APP_NAME, version=APP_VERSION))
         self.lbl_subtitle.config(text=self.tr("subtitle"))
-        self.lbl_output_dir.config(text=f"{self.tr('out_dir_prefix')} {self.output_base_dir}")
+        max_path_chars = max(32, int((max(800, self.root.winfo_width()) - 310) / 7.2))
+        self.lbl_output_dir.config(text=self._format_output_dir_text(max_path_chars))
         self.btn_change_dir.config(text=self.tr("btn_change_dir"))
         self.btn_open_dir.config(text=self.tr("btn_open_dir"))
         self.btn_settings.config(text=self.tr("btn_settings"))
@@ -4415,8 +4711,15 @@ class PerVideoIDTrackerApp:
         P = self.PALETTE
         preview_win = tk.Toplevel(self.root)
         preview_win.title(f"{APP_NAME} — {self.tr('train_preview_title')}")
-        preview_win.geometry("1240x820")
-        preview_win.minsize(1050, 680)
+        try:
+            sw = preview_win.winfo_screenwidth()
+            sh = preview_win.winfo_screenheight()
+            pw = min(1240, max(740, sw - 60))
+            ph = min(820, max(580, sh - 80))
+            preview_win.geometry(f"{pw}x{ph}")
+        except tk.TclError:
+            preview_win.geometry("1240x820")
+        preview_win.minsize(680, 520)
         preview_win.configure(bg=P["bg_main"])
         preview_win.transient(self.root)
         preview_win.grab_set()
@@ -4425,31 +4728,33 @@ class PerVideoIDTrackerApp:
 
         # Top Header Banner
         top_banner = tk.Frame(preview_win, bg=P["bg_card"], padx=18, pady=10, highlightthickness=1, highlightbackground=P["border"])
-        top_banner.pack(fill="x")
+        top_banner.pack(side="top", fill="x")
         tk.Label(
             top_banner,
             text=f"🧠 {self.tr('train_preview_title')}",
-            bg=P["bg_card"], fg=P["text_main"], font=(self.ui_font, 13, "bold")
-        ).pack(anchor="w")
-        tk.Label(
+            bg=P["bg_card"], fg=P["text_main"], font=(self.ui_font, 13, "bold"), anchor="w"
+        ).pack(anchor="w", fill="x")
+        lbl_banner_sub = tk.Label(
             top_banner,
             text=self.tr("train_preview_banner"),
-            bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9)
-        ).pack(anchor="w", pady=(2, 0))
+            bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9),
+            anchor="w", justify="left"
+        )
+        lbl_banner_sub.pack(anchor="w", fill="x", pady=(2, 0))
 
-        # Main Body
+        # Main Body (Grid with Split / Stacked responsive modes)
         body = tk.Frame(preview_win, bg=P["bg_main"], padx=14, pady=10)
-        body.pack(fill="both", expand=True)
+        body.pack(side="top", fill="both", expand=True)
 
         # Left Column: Dataset Inspection & Canvas
         left_outer, left_panel, _, _ = self._create_section_card(
             body, self.tr("preview_inspector_title"), P["teal"], self.tr("badge_inspector")
         )
-        left_outer.pack(side="left", fill="both", expand=True, padx=(0, 12))
+        left_outer.pack_propagate(False)
 
-        # Left Nav Bar: 2 clean, responsive rows
+        # Left Nav Bar: responsive grid
         nav_box = tk.Frame(left_panel, bg=P["bg_card"])
-        nav_box.pack(fill="x", pady=(0, 8))
+        nav_box.pack(side="top", fill="x", pady=(0, 6))
 
         nav_row1 = tk.Frame(nav_box, bg=P["bg_card"])
         nav_row1.pack(fill="x", pady=(0, 4))
@@ -4468,27 +4773,47 @@ class PerVideoIDTrackerApp:
         var_show_ai = tk.BooleanVar(value=True)
 
         btn_prev = ttk.Button(nav_row1, text=self.tr("btn_prev_sample"), style="Ghost.TButton", takefocus=False)
-        btn_prev.pack(side="left", padx=(0, 4))
-
         lbl_counter = tk.Label(
             nav_row1, text=self.tr("lbl_sample_counter", cur=0, tot=0), bg=P["bg_card"], fg=P["text_main"],
-            font=(self.mono_font, 10, "bold"), width=16, anchor="center"
+            font=(self.mono_font, 10, "bold"), width=14, anchor="center"
         )
-        lbl_counter.pack(side="left", padx=4)
-
         btn_next = ttk.Button(nav_row1, text=self.tr("btn_next_sample"), style="Ghost.TButton", takefocus=False)
-        btn_next.pack(side="left", padx=(0, 8))
-
         btn_exclude = ttk.Button(nav_row1, text=self.tr("btn_exclude_sample"), style="Ghost.TButton", takefocus=False)
-        btn_exclude.pack(side="left", padx=(0, 8))
-
         btn_auto_clean = ttk.Button(nav_row1, text=self.tr("btn_auto_clean"), style="Ghost.TButton", takefocus=False)
-        btn_auto_clean.pack(side="left", padx=(0, 8))
         ToolTip(btn_auto_clean, lambda: self.tr("tt_auto_clean"))
-
         btn_rescan = ttk.Button(nav_row1, text=self.tr("btn_rescan_samples"), style="Ghost.TButton", takefocus=False)
-        btn_rescan.pack(side="right")
         ToolTip(btn_rescan, lambda: self.tr("tt_rescan_samples"))
+
+        nav_mode_state = [None]
+
+        def _apply_nav_layout(mode):
+            if nav_mode_state[0] == mode:
+                return
+            nav_mode_state[0] = mode
+            for w in (btn_prev, lbl_counter, btn_next, btn_exclude, btn_auto_clean, btn_rescan):
+                w.grid_forget()
+            if mode == "1row":
+                for c in range(7):
+                    nav_row1.grid_columnconfigure(c, weight=1 if c == 5 else 0)
+                btn_prev.grid(row=0, column=0, sticky="w", padx=(0, 4))
+                lbl_counter.grid(row=0, column=1, padx=4)
+                btn_next.grid(row=0, column=2, sticky="w", padx=(0, 8))
+                btn_exclude.grid(row=0, column=3, sticky="w", padx=(0, 6))
+                btn_auto_clean.grid(row=0, column=4, sticky="w", padx=(0, 6))
+                btn_rescan.grid(row=0, column=6, sticky="e")
+            else:
+                for c in range(3):
+                    nav_row1.grid_columnconfigure(c, weight=1)
+                for c in range(3, 7):
+                    nav_row1.grid_columnconfigure(c, weight=0)
+                btn_prev.grid(row=0, column=0, sticky="ew", padx=(0, 4), pady=(0, 4))
+                lbl_counter.grid(row=0, column=1, sticky="ew", padx=4, pady=(0, 4))
+                btn_next.grid(row=0, column=2, sticky="ew", padx=(4, 0), pady=(0, 4))
+                btn_exclude.grid(row=1, column=0, sticky="ew", padx=(0, 4))
+                btn_auto_clean.grid(row=1, column=1, sticky="ew", padx=4)
+                btn_rescan.grid(row=1, column=2, sticky="ew", padx=(4, 0))
+
+        _apply_nav_layout("1row")
 
         chk_zoom = tk.Checkbutton(
             nav_row2, text=self.tr("chk_zoom_rodent"), variable=var_zoom_rodent,
@@ -4506,14 +4831,17 @@ class PerVideoIDTrackerApp:
         )
         chk_ai.pack(side="left")
 
-        # Manual Annotation & Keypoint Labeling Bar
+        # Manual Annotation & Keypoint Labeling Bar (2-tier so hover hint never shifts tool buttons!)
         annot_box = tk.Frame(left_panel, bg=P["bg_card"], padx=6, pady=4, highlightthickness=1, highlightbackground=P["border"])
-        annot_box.pack(fill="x", pady=(0, 6))
+        annot_box.pack(side="top", fill="x", pady=(0, 6))
 
-        tk.Label(
-            annot_box, text="🎯 " + self.tr("lbl_annot_tool_title"),
+        annot_tools_row = tk.Frame(annot_box, bg=P["bg_card"])
+        annot_tools_row.pack(fill="x")
+
+        lbl_annot_title = tk.Label(
+            annot_tools_row, text="🎯 " + self.tr("lbl_annot_tool_title"),
             bg=P["bg_card"], fg=P["cyan"], font=(self.ui_font, 9, "bold")
-        ).pack(side="left", padx=(2, 6))
+        )
 
         var_annot_tool = tk.StringVar(value="pan")
         var_auto_advance = tk.BooleanVar(value=True)
@@ -4544,76 +4872,105 @@ class PerVideoIDTrackerApp:
             ("tail_base", self.tr("tool_tail"), P["cyan"]),
         ]
 
+        tool_btn_list = []
         for t_key, t_txt, t_fg in tools_data:
             b = tk.Button(
-                annot_box, text=t_txt, font=(self.ui_font, 8, "bold"),
+                annot_tools_row, text=t_txt, font=(self.ui_font, 8, "bold"),
                 bg=P["bg_main"], fg=t_fg, activebackground=P["bg_panel"],
                 activeforeground=t_fg, padx=6, pady=2, bd=1,
                 command=lambda k=t_key: _set_tool(k)
             )
-            b.pack(side="left", padx=2)
             tool_btns[t_key] = b
+            tool_btn_list.append(b)
 
         chk_advance = tk.Checkbutton(
-            annot_box, text=self.tr("chk_auto_advance"), variable=var_auto_advance,
+            annot_tools_row, text=self.tr("chk_auto_advance"), variable=var_auto_advance,
             bg=P["bg_card"], fg=P["text_main"], selectcolor=P["bg_main"],
             activebackground=P["bg_card"], activeforeground=P["cyan"],
             font=(self.ui_font, 8)
         )
-        chk_advance.pack(side="left", padx=(8, 2))
 
         btn_clear_pts = tk.Button(
-            annot_box, text=self.tr("btn_clear_pts"), font=(self.ui_font, 8),
+            annot_tools_row, text=self.tr("btn_clear_pts"), font=(self.ui_font, 8),
             bg=P["bg_panel"], fg=P["danger"], activebackground=P["bg_main"],
             activeforeground=P["danger"], padx=5, pady=2, bd=1,
             command=lambda: _clear_current_sample_points()
         )
-        btn_clear_pts.pack(side="left", padx=2)
         ToolTip(btn_clear_pts, lambda: self.tr("tt_clear_pts"))
+
+        annot_mode_state = [None]
+
+        def _apply_annot_layout(mode):
+            if annot_mode_state[0] == mode:
+                return
+            annot_mode_state[0] = mode
+            for w in [lbl_annot_title, *tool_btn_list, chk_advance, btn_clear_pts]:
+                w.grid_forget()
+            if mode == "1row":
+                for c in range(9):
+                    annot_tools_row.grid_columnconfigure(c, weight=1 if c == 7 else 0)
+                lbl_annot_title.grid(row=0, column=0, sticky="w", padx=(2, 6))
+                for idx, b in enumerate(tool_btn_list):
+                    b.grid(row=0, column=idx + 1, sticky="w", padx=2)
+                chk_advance.grid(row=0, column=6, sticky="w", padx=(6, 2))
+                btn_clear_pts.grid(row=0, column=8, sticky="e", padx=2)
+            else:
+                for c in range(5):
+                    annot_tools_row.grid_columnconfigure(c, weight=1)
+                for c in range(5, 9):
+                    annot_tools_row.grid_columnconfigure(c, weight=0)
+                for idx, b in enumerate(tool_btn_list):
+                    b.grid(row=0, column=idx, sticky="ew", padx=2, pady=(0, 3))
+                lbl_annot_title.grid(row=1, column=0, columnspan=2, sticky="w", padx=(2, 4))
+                chk_advance.grid(row=1, column=2, columnspan=2, sticky="w", padx=2)
+                btn_clear_pts.grid(row=1, column=4, sticky="e", padx=2)
+
+        _apply_annot_layout("1row")
 
         lbl_annot_hint = tk.Label(
             annot_box, text=self.tr("lbl_annot_hint_default"),
-            bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 8)
+            bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 8), anchor="w"
         )
-        lbl_annot_hint.pack(side="right", padx=(4, 2))
+        lbl_annot_hint.pack(fill="x", padx=2, pady=(3, 0))
 
-        # Canvas View
-        canvas_view = tk.Canvas(left_panel, bg=P["bg_main"], highlightthickness=1, highlightbackground=P["border"], cursor="crosshair")
-        canvas_view.pack(fill="both", expand=True, pady=(0, 6))
+        # Pack bottom scrubber & telemetry bar at side="bottom" FIRST so they never get clipped!
+        slider_var = tk.DoubleVar(value=1.0)
+        slider_samples = ttk.Scale(left_panel, from_=1.0, to=1.0, variable=slider_var, orient="horizontal")
+        slider_samples.pack(side="bottom", fill="x")
 
-        # Bottom Telemetry Bar
         lbl_sample_info = tk.Label(
             left_panel,
             text=self.tr("status_harvesting"),
             bg=P["bg_card"], fg=P["cyan"], font=(self.mono_font, 9),
             anchor="w", padx=8, pady=4, highlightthickness=1, highlightbackground=P["border"]
         )
-        lbl_sample_info.pack(fill="x", pady=(0, 6))
+        lbl_sample_info.pack(side="bottom", fill="x", pady=(0, 6))
 
-        # Scrubber Slider
-        slider_var = tk.DoubleVar(value=1.0)
-        slider_samples = ttk.Scale(left_panel, from_=1.0, to=1.0, variable=slider_var, orient="horizontal")
-        slider_samples.pack(fill="x")
+        # Canvas View fills remaining center space
+        canvas_view = tk.Canvas(left_panel, bg=P["bg_main"], highlightthickness=1, highlightbackground=P["border"], cursor="crosshair")
+        canvas_view.pack(side="top", fill="both", expand=True, pady=(0, 6))
 
-        # Right Column: Training Dashboard (Fixed width to prevent layout jitter)
+        # Right Column: Training Dashboard (Zero-jitter with pack_propagate(False))
         right_outer, right_panel, _, _ = self._create_section_card(
             body, self.tr("preview_trainer_title"), P["emerald"], self.tr("badge_trainer")
         )
-        right_outer.pack(side="left", fill="y", padx=0)
-        right_outer.config(width=350)
         right_outer.pack_propagate(False)
+
+        # Pack Close button at side="bottom" FIRST so it is always visible
+        btn_close = ttk.Button(right_panel, text=self.tr("btn_close"), command=preview_win.destroy, style="Ghost.TButton")
+        btn_close.pack(fill="x", side="bottom", pady=(4, 0))
 
         # Telemetry Card
         t_card = tk.LabelFrame(
             right_panel, text=f"📊 {self.tr('lbl_ds_telemetry')}",
             bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9, "bold"),
-            padx=10, pady=8, highlightthickness=1, highlightbackground=P["border"]
+            padx=10, pady=6, highlightthickness=1, highlightbackground=P["border"]
         )
-        t_card.pack(fill="x", pady=(0, 10))
+        t_card.pack(side="top", fill="x", pady=(0, 8))
 
         def _make_t_row(parent, label_text, default_val, val_fg=P["text_main"]):
             row = tk.Frame(parent, bg=P["bg_card"])
-            row.pack(fill="x", pady=2)
+            row.pack(fill="x", pady=1)
             tk.Label(row, text=label_text, bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 8)).pack(side="left")
             val_lbl = tk.Label(row, text=str(default_val), bg=P["bg_card"], fg=val_fg, font=(self.mono_font, 9, "bold"))
             val_lbl.pack(side="right")
@@ -4628,12 +4985,12 @@ class PerVideoIDTrackerApp:
         p_card = tk.LabelFrame(
             right_panel, text=f"⚙ {self.tr('lbl_train_params')}",
             bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9, "bold"),
-            padx=10, pady=8, highlightthickness=1, highlightbackground=P["border"]
+            padx=10, pady=6, highlightthickness=1, highlightbackground=P["border"]
         )
-        p_card.pack(fill="x", pady=(0, 10))
+        p_card.pack(side="top", fill="x", pady=(0, 8))
 
         ep_row = tk.Frame(p_card, bg=P["bg_card"])
-        ep_row.pack(fill="x", pady=3)
+        ep_row.pack(fill="x", pady=2)
         tk.Label(ep_row, text=self.tr("lbl_epochs"), bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 8)).pack(side="left")
         var_epochs = tk.StringVar(value="10")
         spin_ep = tk.Spinbox(
@@ -4653,46 +5010,105 @@ class PerVideoIDTrackerApp:
         exec_card = tk.LabelFrame(
             right_panel, text=f"🚀 {self.tr('btn_start_training')}",
             bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9, "bold"),
-            padx=10, pady=8, highlightthickness=1, highlightbackground=P["border"]
+            padx=10, pady=6, highlightthickness=1, highlightbackground=P["border"]
         )
-        exec_card.pack(fill="both", expand=True, pady=(0, 8))
+        exec_card.pack(side="top", fill="both", expand=True, pady=(0, 4))
 
         btn_train = ttk.Button(exec_card, text=self.tr("btn_start_training"), style="Emerald.TButton")
-        btn_train.pack(fill="x", pady=(0, 6))
+        btn_train.pack(side="top", fill="x", pady=(0, 6))
 
         prog_bar = ttk.Progressbar(exec_card, orient="horizontal", mode="determinate")
-        prog_bar.pack(fill="x", pady=(0, 6))
+        prog_bar.pack(side="top", fill="x", pady=(0, 6))
 
         lbl_prog_status = tk.Label(
             exec_card, text=self.tr("status_waiting_samples"), bg=P["bg_card"], fg=P["text_muted"],
             font=(self.ui_font, 8), anchor="w", wraplength=310, justify="left"
         )
-        lbl_prog_status.pack(fill="x", pady=(0, 4))
+        lbl_prog_status.pack(side="top", fill="x", pady=(0, 4))
+
+        btn_test = ttk.Button(exec_card, text=self.tr("btn_test_model"), style="Ghost.TButton")
+        btn_test.pack(side="bottom", fill="x", pady=(4, 0))
 
         txt_log = tk.Text(
-            exec_card, height=7, bg=P["bg_main"], fg=P["text_muted"],
+            exec_card, height=4, bg=P["bg_main"], fg=P["text_muted"],
             font=(self.mono_font, 8), highlightthickness=1, highlightbackground=P["border"],
             wrap="word"
         )
-        txt_log.pack(fill="both", expand=True, pady=(0, 6))
+        txt_log.pack(side="top", fill="both", expand=True)
 
-        btn_test = ttk.Button(exec_card, text=self.tr("btn_test_model"), style="Ghost.TButton")
-        btn_test.pack(fill="x", pady=(0, 4))
+        preview_layout_state = {"mode": None, "last_w": 0}
 
-        btn_close = ttk.Button(right_panel, text=self.tr("btn_close"), command=preview_win.destroy, style="Ghost.TButton")
-        btn_close.pack(fill="x", side="bottom")
+        def _apply_preview_body_layout(mode, win_w):
+            right_w = min(355, max(310, int(win_w * 0.30)))
+            if preview_layout_state["mode"] != mode:
+                preview_layout_state["mode"] = mode
+                left_outer.grid_forget()
+                right_outer.grid_forget()
+                if mode == "split":
+                    body.grid_rowconfigure(0, weight=1, minsize=260)
+                    body.grid_rowconfigure(1, weight=0, minsize=0)
+                    body.grid_columnconfigure(0, weight=1, minsize=360)
+                    body.grid_columnconfigure(1, weight=0, minsize=right_w)
+                    right_outer.config(width=right_w)
+                    left_outer.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=0)
+                    right_outer.grid(row=0, column=1, sticky="nsew", padx=0, pady=0)
+                else:
+                    body.grid_rowconfigure(0, weight=3, minsize=240)
+                    body.grid_rowconfigure(1, weight=2, minsize=210)
+                    body.grid_columnconfigure(0, weight=1, minsize=280)
+                    body.grid_columnconfigure(1, weight=0, minsize=0)
+                    right_outer.config(width=max(280, win_w - 28))
+                    left_outer.grid(row=0, column=0, sticky="nsew", padx=0, pady=(0, 8))
+                    right_outer.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
+            elif mode == "split":
+                cur_min = body.grid_columnconfigure(1).get("minsize", 0)
+                if abs(right_w - cur_min) >= 6:
+                    body.grid_columnconfigure(1, weight=0, minsize=right_w)
+                    right_outer.config(width=right_w)
+
+        _apply_preview_body_layout("split", 1240)
+
+        def _on_preview_win_configure(event=None):
+            if event is not None and event.widget is not preview_win:
+                return
+            w = preview_win.winfo_width()
+            if w <= 100 or abs(w - preview_layout_state["last_w"]) < 4:
+                return
+            preview_layout_state["last_w"] = w
+            lbl_banner_sub.config(wraplength=max(260, w - 40))
+
+            target_mode = preview_layout_state["mode"] or "split"
+            if target_mode == "split" and w < 850:
+                target_mode = "stacked"
+            elif target_mode == "stacked" and w >= 880:
+                target_mode = "split"
+            _apply_preview_body_layout(target_mode, w)
+
+            left_avail_w = (w - 28) if target_mode == "stacked" else (w - min(355, max(310, int(w * 0.30))) - 40)
+            if nav_mode_state[0] == "1row" and left_avail_w < 620:
+                _apply_nav_layout("2row")
+            elif nav_mode_state[0] == "2row" and left_avail_w >= 645:
+                _apply_nav_layout("1row")
+
+            if annot_mode_state[0] == "1row" and left_avail_w < 700:
+                _apply_annot_layout("2row")
+            elif annot_mode_state[0] == "2row" and left_avail_w >= 725:
+                _apply_annot_layout("1row")
+
+        preview_win.bind("<Configure>", _on_preview_win_configure)
 
         def _render_current_sample():
             if not preview_win.winfo_exists():
                 return
             if not samples_list or current_idx[0] < 0 or current_idx[0] >= len(samples_list):
                 canvas_view.delete("all")
-                cw = max(400, canvas_view.winfo_width())
-                ch = max(300, canvas_view.winfo_height())
+                cw = max(120, canvas_view.winfo_width())
+                ch = max(100, canvas_view.winfo_height())
                 canvas_view.create_text(
                     cw // 2, ch // 2,
                     text=self.tr("train_searching_canvas"),
-                    fill=P["text_muted"], font=(self.ui_font, 11, "bold")
+                    fill=P["text_muted"], font=(self.ui_font, 11, "bold"),
+                    width=max(100, cw - 24)
                 )
                 return
 
@@ -4820,8 +5236,8 @@ class PerVideoIDTrackerApp:
             else:
                 x1, y1 = 0, 0
 
-            cw = max(400, canvas_view.winfo_width())
-            ch = max(300, canvas_view.winfo_height())
+            cw = max(120, canvas_view.winfo_width())
+            ch = max(100, canvas_view.winfo_height())
             scale = min(cw / float(disp.shape[1]), ch / float(disp.shape[0]))
             tw = max(10, int(disp.shape[1] * scale))
             th = max(10, int(disp.shape[0] * scale))
@@ -5330,6 +5746,20 @@ class PerVideoIDTrackerApp:
         chk_zoom.config(command=_render_current_sample)
         chk_ai.config(command=_render_current_sample)
 
+        canvas_cfg_state = {"w": 0, "h": 0, "after_id": None}
+
+        def _on_train_canvas_configure(event):
+            if abs(event.width - canvas_cfg_state["w"]) < 2 and abs(event.height - canvas_cfg_state["h"]) < 2:
+                return
+            canvas_cfg_state["w"] = event.width
+            canvas_cfg_state["h"] = event.height
+            if canvas_cfg_state["after_id"] is not None:
+                try:
+                    preview_win.after_cancel(canvas_cfg_state["after_id"])
+                except tk.TclError:
+                    pass
+            canvas_cfg_state["after_id"] = preview_win.after(16, _render_current_sample)
+
         canvas_view.bind("<MouseWheel>", _on_wheel)
         canvas_view.bind("<Button-4>", _on_wheel)
         canvas_view.bind("<Button-5>", _on_wheel)
@@ -5339,7 +5769,7 @@ class PerVideoIDTrackerApp:
         canvas_view.bind("<Motion>", _on_canvas_motion)
         canvas_view.bind("<ButtonPress-2>", _on_canvas_right_click)
         canvas_view.bind("<ButtonPress-3>", _on_canvas_right_click)
-        canvas_view.bind("<Configure>", lambda e: _render_current_sample())
+        canvas_view.bind("<Configure>", _on_train_canvas_configure)
 
         preview_win.bind("<Left>", _prev_sample)
         preview_win.bind("<Right>", _next_sample)
@@ -5388,7 +5818,8 @@ class PerVideoIDTrackerApp:
         if chosen:
             self.output_base_dir = os.path.abspath(chosen)
             os.makedirs(self.output_base_dir, exist_ok=True)
-            self.lbl_output_dir.config(text=f"{self.tr('out_dir_prefix')} {self.output_base_dir}")
+            max_path_chars = max(32, int((max(800, self.root.winfo_width()) - 310) / 7.2))
+            self.lbl_output_dir.config(text=self._format_output_dir_text(max_path_chars))
             self.log(f"📁 Output dir: {self.output_base_dir}")
             self._try_autoload_last_profile()
 
@@ -5596,8 +6027,9 @@ class PerVideoIDTrackerApp:
         dlg = tk.Toplevel(self.root)
         dlg.title(self.tr("url_dlg_title"))
         dlg.geometry("580x270")
+        dlg.minsize(460, 250)
         dlg.configure(bg=P["bg_card"])
-        dlg.resizable(False, False)
+        dlg.resizable(True, False)
         dlg.transient(self.root)
         dlg.grab_set()
 
@@ -5686,7 +6118,7 @@ class PerVideoIDTrackerApp:
 
         url_entry.bind("<Return>", _submit_url)
         btn_bar = tk.Frame(box, bg=P["bg_card"])
-        btn_bar.pack(fill="x", pady=(6, 0))
+        btn_bar.pack(side="bottom", fill="x", pady=(6, 0))
         ttk.Button(btn_bar, text=self.tr("url_dlg_local_btn"), command=_open_local_teams_folder, style="Teal.TButton").pack(side="left")
         ttk.Button(btn_bar, text=self.tr("btn_cancel"), command=dlg.destroy, style="Ghost.TButton").pack(side="right", padx=(6, 0))
         ttk.Button(btn_bar, text=self.tr("url_dlg_add_btn"), command=_submit_url, style="Emerald.TButton").pack(side="right")
@@ -5713,6 +6145,7 @@ class PerVideoIDTrackerApp:
             except (tk.TclError, AttributeError) as e:
                 logger.debug("Inline id entry destroy exception: %s", e)
             self._inline_id_entry = None
+            self._inline_id_uid = None
         sel = self.tree.selection()
         if not sel:
             return
@@ -5731,6 +6164,7 @@ class PerVideoIDTrackerApp:
             except (tk.TclError, AttributeError) as e:
                 logger.debug("Inline id entry destroy exception: %s", e)
             self._inline_id_entry = None
+            self._inline_id_uid = None
         for item in self.tree.get_children():
             self.tree.delete(item)
         self.video_data.clear()
@@ -5779,6 +6213,7 @@ class PerVideoIDTrackerApp:
             except (tk.TclError, AttributeError) as e:
                 logger.debug("Inline id entry cleanup exception: %s", e)
             self._inline_id_entry = None
+            self._inline_id_uid = None
 
         bbox = self.tree.bbox(uid, "animal_id")
         if not bbox or bbox[2] <= 0 or force_dialog:
@@ -5808,6 +6243,7 @@ class PerVideoIDTrackerApp:
         entry.place(x=x, y=entry_y, width=w, height=entry_h)
         entry.focus_force()
         self._inline_id_entry = entry
+        self._inline_id_uid = uid
 
         is_committing = False
 
@@ -5830,6 +6266,7 @@ class PerVideoIDTrackerApp:
             if entry.winfo_exists():
                 entry.destroy()
             self._inline_id_entry = None
+            self._inline_id_uid = None
             self.tree.focus_set()
 
             # Advance selection to the next item for rapid sequential editing with Enter
@@ -5848,6 +6285,7 @@ class PerVideoIDTrackerApp:
             if entry.winfo_exists():
                 entry.destroy()
             self._inline_id_entry = None
+            self._inline_id_uid = None
             self.tree.focus_set()
             return "break"
 
@@ -8293,7 +8731,15 @@ class PerVideoIDTrackerApp:
         P = self.PALETTE
         rev_win = tk.Toplevel(self.root)
         rev_win.title(f"{APP_NAME} — {self.tr('review_title')}")
-        rev_win.geometry("1240x820")
+        try:
+            sw = rev_win.winfo_screenwidth()
+            sh = rev_win.winfo_screenheight()
+            rw_init = min(1240, max(740, sw - 60))
+            rh_init = min(820, max(580, sh - 80))
+            rev_win.geometry(f"{rw_init}x{rh_init}")
+        except tk.TclError:
+            rev_win.geometry("1240x820")
+        rev_win.minsize(680, 520)
         rev_win.configure(bg=P["bg_main"])
         rev_win.transient(self.root)
         rev_win.grab_set()
@@ -8301,23 +8747,29 @@ class PerVideoIDTrackerApp:
         rev_win.focus_force()
 
         top_banner = tk.Frame(rev_win, bg=P["bg_card"], padx=18, pady=8, highlightthickness=1, highlightbackground=P["border"])
-        top_banner.pack(fill="x")
-        tk.Label(
+        top_banner.pack(side="top", fill="x")
+        lbl_rev_help = tk.Label(
             top_banner,
             text=self.tr("review_banner_help"),
-            bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9)
-        ).pack(anchor="w")
+            bg=P["bg_card"], fg=P["text_muted"], font=(self.ui_font, 9),
+            anchor="w", justify="left"
+        )
+        lbl_rev_help.pack(anchor="w", fill="x")
+
+        # Pack bottom_bar at side="bottom" FIRST so Export button is never clipped!
+        bottom_bar = tk.Frame(rev_win, bg=P["bg_main"], padx=16, pady=8)
+        bottom_bar.pack(side="bottom", fill="x")
 
         body = tk.Frame(rev_win, bg=P["bg_main"], padx=16, pady=10)
-        body.pack(fill="both", expand=True)
+        body.pack(side="top", fill="both", expand=True)
 
         left_outer, left_panel, _, _ = self._create_section_card(
             body, self.tr("events_table_title"), P["blue"], self.tr("badge_events")
         )
-        left_outer.pack(side="left", fill="y", padx=(0, 12))
+        left_outer.pack_propagate(False)
 
         cols = ("ego", "run", "sec", "part", "valid", "save")
-        dip_tree = ttk.Treeview(left_panel, columns=cols, show="headings", height=20, selectmode="browse")
+        dip_tree = ttk.Treeview(left_panel, columns=cols, show="headings", height=10, selectmode="browse")
         dip_tree.heading("ego", text=self.tr("col_rev_id"))
         dip_tree.heading("run", text=self.tr("col_rev_run"))
         dip_tree.heading("sec", text=self.tr("col_rev_sec"))
@@ -8325,28 +8777,52 @@ class PerVideoIDTrackerApp:
         dip_tree.heading("valid", text=self.tr("col_rev_valid"))
         dip_tree.heading("save", text=self.tr("col_rev_save"))
 
-        dip_tree.column("ego", width=65, anchor="center")
-        dip_tree.column("run", width=60, anchor="center")
-        dip_tree.column("sec", width=70, anchor="center")
-        dip_tree.column("part", width=170, anchor="center")
-        dip_tree.column("valid", width=90, anchor="center")
-        dip_tree.column("save", width=70, anchor="center")
-        dip_tree.pack(side="left", fill="y")
+        dip_tree.column("ego", width=60, minwidth=45, anchor="center")
+        dip_tree.column("run", width=55, minwidth=40, anchor="center")
+        dip_tree.column("sec", width=65, minwidth=50, anchor="center")
+        dip_tree.column("part", width=155, minwidth=95, anchor="center")
+        dip_tree.column("valid", width=85, minwidth=60, anchor="center")
+        dip_tree.column("save", width=65, minwidth=45, anchor="center")
+        dip_tree.pack(side="left", fill="both", expand=True)
 
         sb = ttk.Scrollbar(left_panel, orient="vertical", command=dip_tree.yview)
         sb.pack(side="right", fill="y")
         dip_tree.configure(yscrollcommand=sb.set)
 
+        last_dip_tree_w = [0]
+
+        def _on_dip_tree_configure(event=None):
+            tw = dip_tree.winfo_width()
+            if tw <= 60 or abs(tw - last_dip_tree_w[0]) < 4:
+                return
+            last_dip_tree_w[0] = tw
+            avail = max(300, tw - 4)
+            w_ego = max(48, int(avail * 0.12))
+            w_run = max(44, int(avail * 0.11))
+            w_sec = max(54, int(avail * 0.13))
+            w_val = max(64, int(avail * 0.17))
+            w_sav = max(48, int(avail * 0.12))
+            w_prt = max(95, avail - w_ego - w_run - w_sec - w_val - w_sav)
+            dip_tree.column("ego", width=w_ego)
+            dip_tree.column("run", width=w_run)
+            dip_tree.column("sec", width=w_sec)
+            dip_tree.column("part", width=w_prt)
+            dip_tree.column("valid", width=w_val)
+            dip_tree.column("save", width=w_sav)
+
+        dip_tree.bind("<Configure>", _on_dip_tree_configure)
+
         right_outer, right_panel, _, _ = self._create_section_card(
             body, self.tr("inspector_canvas_title"), P["teal"], self.tr("badge_inspector")
         )
-        right_outer.pack(side="left", fill="both", expand=True)
+        right_outer.pack_propagate(False)
+
+        # Pack ctrl_box at side="bottom" FIRST so inspector buttons are never pushed off by canvas!
+        ctrl_box = tk.Frame(right_panel, bg=P["bg_card"])
+        ctrl_box.pack(side="bottom", fill="x")
 
         canvas_view = tk.Canvas(right_panel, bg=P["bg_main"], highlightthickness=0, cursor="crosshair")
-        canvas_view.pack(fill="both", expand=True, pady=(0, 8))
-
-        ctrl_box = tk.Frame(right_panel, bg=P["bg_card"])
-        ctrl_box.pack(fill="x")
+        canvas_view.pack(side="top", fill="both", expand=True, pady=(0, 8))
 
         dip_lookup = {}
         ordered_iids = []
@@ -8383,6 +8859,8 @@ class PerVideoIDTrackerApp:
         }
 
         def render_preview(iid=None):
+            if not rev_win.winfo_exists():
+                return
             if iid is None:
                 iid = current_iid[0]
             if not iid or iid not in dip_lookup:
@@ -8432,15 +8910,16 @@ class PerVideoIDTrackerApp:
                 view_state["cy"] = (y1 + vh / 2.0) / float(fh)
                 disp = disp[y1:y1 + int(vh), x1:x1 + int(vw)]
 
-            cw = max(480, canvas_view.winfo_width())
-            ch = max(320, canvas_view.winfo_height())
+            cw = max(120, canvas_view.winfo_width())
+            ch = max(100, canvas_view.winfo_height())
             scale = min(cw / float(disp.shape[1]), ch / float(disp.shape[0]))
             tw = max(10, int(disp.shape[1] * scale))
             th = max(10, int(disp.shape[0] * scale))
 
             resized = cv2.resize(disp, (tw, th), interpolation=cv2.INTER_LINEAR)
-            cv2.rectangle(resized, (8, th - 32), (240, th - 8), (18, 22, 28), -1)
-            cv2.putText(resized, f"Zoom: {z:.2f}x (Wheel / Drag)", (15, th - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (16, 185, 129), 1)
+            if tw >= 250 and th >= 45:
+                cv2.rectangle(resized, (8, th - 32), (240, th - 8), (18, 22, 28), -1)
+                cv2.putText(resized, f"Zoom: {z:.2f}x (Wheel / Drag)", (15, th - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (16, 185, 129), 1)
 
             ok, buf = cv2.imencode(".ppm", resized)
             if ok:
@@ -8510,6 +8989,20 @@ class PerVideoIDTrackerApp:
             render_preview()
             return "break"
 
+        rev_canvas_cfg = {"w": 0, "h": 0, "after_id": None}
+
+        def _on_rev_canvas_configure(event):
+            if abs(event.width - rev_canvas_cfg["w"]) < 2 and abs(event.height - rev_canvas_cfg["h"]) < 2:
+                return
+            rev_canvas_cfg["w"] = event.width
+            rev_canvas_cfg["h"] = event.height
+            if rev_canvas_cfg["after_id"] is not None:
+                try:
+                    rev_win.after_cancel(rev_canvas_cfg["after_id"])
+                except tk.TclError:
+                    pass
+            rev_canvas_cfg["after_id"] = rev_win.after(16, render_preview)
+
         canvas_view.bind("<MouseWheel>", on_canvas_wheel)
         canvas_view.bind("<Button-4>", on_canvas_wheel)
         canvas_view.bind("<Button-5>", on_canvas_wheel)
@@ -8517,7 +9010,7 @@ class PerVideoIDTrackerApp:
         canvas_view.bind("<B1-Motion>", on_canvas_drag_move)
         canvas_view.bind("<ButtonPress-3>", on_canvas_drag_start)
         canvas_view.bind("<B3-Motion>", on_canvas_drag_move)
-        canvas_view.bind("<Configure>", lambda e: render_preview())
+        canvas_view.bind("<Configure>", _on_rev_canvas_configure)
 
         def update_tree_row(iid):
             res, r, d = dip_lookup[iid]
@@ -8668,8 +9161,8 @@ class PerVideoIDTrackerApp:
                 return
             fh, fw = raw_frame.shape[:2]
 
-            cw = max(480, canvas_view.winfo_width())
-            ch = max(320, canvas_view.winfo_height())
+            cw = max(120, canvas_view.winfo_width())
+            ch = max(100, canvas_view.winfo_height())
             z = view_state["zoom"]
             if z > 1.01:
                 vw = max(40.0, fw / z)
@@ -8713,65 +9206,146 @@ class PerVideoIDTrackerApp:
             render_preview(iid)
             return "break"
 
-        quick_btn_row = tk.Frame(ctrl_box, bg=P["bg_panel"], pady=6, padx=6)
+        quick_btn_row = tk.Frame(ctrl_box, bg=P["bg_panel"], pady=5, padx=6)
         quick_btn_row.pack(fill="x")
 
         btn_r_prev = ttk.Button(quick_btn_row, text=self.tr("btn_prev"), command=lambda: step_selection(-1), style="Ghost.TButton")
-        btn_r_prev.pack(side="left", padx=(0, 6))
         ToolTip(btn_r_prev, lambda: self.tr("tt_rev_prev"))
 
         btn_r_next = ttk.Button(quick_btn_row, text=self.tr("btn_next"), command=lambda: step_selection(1), style="Ghost.TButton")
-        btn_r_next.pack(side="left", padx=(0, 10))
         ToolTip(btn_r_next, lambda: self.tr("tt_rev_next"))
 
         btn_r_valid = ttk.Button(quick_btn_row, text=self.tr("btn_toggle_valid"), command=hotkey_toggle_valid, style="SoftRed.TButton")
-        btn_r_valid.pack(side="left", padx=(0, 6))
         ToolTip(btn_r_valid, lambda: self.tr("tt_rev_valid"))
 
         btn_r_part = ttk.Button(quick_btn_row, text=self.tr("btn_cycle_part"), command=hotkey_cycle_part, style="Teal.TButton")
-        btn_r_part.pack(side="left", padx=(0, 6))
         ToolTip(btn_r_part, lambda: self.tr("tt_rev_part"))
 
         btn_r_zoom = ttk.Button(quick_btn_row, text="2.5× [Z]", command=lambda: zoom_to_dip(2.5), style="Ghost.TButton")
-        btn_r_zoom.pack(side="left", padx=(0, 6))
         ToolTip(btn_r_zoom, lambda: self.tr("tt_rev_zoom"))
 
         btn_r_reset = ttk.Button(quick_btn_row, text="1.0× [R]", command=reset_zoom, style="Ghost.TButton")
-        btn_r_reset.pack(side="left", padx=(0, 6))
         ToolTip(btn_r_reset, lambda: self.tr("tt_rev_reset"))
 
         btn_r_crop = ttk.Button(quick_btn_row, text=self.tr("btn_toggle_crop"), command=hotkey_toggle_save, style="Primary.TButton")
-        btn_r_crop.pack(side="left")
         ToolTip(btn_r_crop, lambda: self.tr("tt_rev_crop"))
 
-        direct_part_row = tk.Frame(ctrl_box, bg=P["bg_panel"], pady=3, padx=6)
+        rev_qbtn_mode = [None]
+
+        def _apply_rev_qbtn_layout(mode):
+            if rev_qbtn_mode[0] == mode:
+                return
+            rev_qbtn_mode[0] = mode
+            all_qbtns = (btn_r_prev, btn_r_next, btn_r_valid, btn_r_part, btn_r_zoom, btn_r_reset, btn_r_crop)
+            for b in all_qbtns:
+                b.grid_forget()
+            if mode == "1row":
+                for c in range(7):
+                    quick_btn_row.grid_columnconfigure(c, weight=1)
+                for idx, b in enumerate(all_qbtns):
+                    b.grid(row=0, column=idx, sticky="ew", padx=2, pady=0)
+            else:
+                for c in range(4):
+                    quick_btn_row.grid_columnconfigure(c, weight=1)
+                for c in range(4, 7):
+                    quick_btn_row.grid_columnconfigure(c, weight=0)
+                btn_r_prev.grid(row=0, column=0, sticky="ew", padx=2, pady=(0, 3))
+                btn_r_next.grid(row=0, column=1, sticky="ew", padx=2, pady=(0, 3))
+                btn_r_valid.grid(row=0, column=2, sticky="ew", padx=2, pady=(0, 3))
+                btn_r_part.grid(row=0, column=3, sticky="ew", padx=2, pady=(0, 3))
+                btn_r_zoom.grid(row=1, column=0, sticky="ew", padx=2)
+                btn_r_reset.grid(row=1, column=1, sticky="ew", padx=2)
+                btn_r_crop.grid(row=1, column=2, columnspan=2, sticky="ew", padx=2)
+
+        _apply_rev_qbtn_layout("2row")
+
+        direct_part_row = tk.Frame(ctrl_box, bg=P["bg_panel"], pady=4, padx=6)
         direct_part_row.pack(fill="x", pady=(2, 0))
 
+        part_btns_line = tk.Frame(direct_part_row, bg=P["bg_panel"])
+        part_btns_line.pack(fill="x")
+
         tk.Label(
-            direct_part_row, text=self.tr("rev_quick_part_lbl"),
+            part_btns_line, text=self.tr("rev_quick_part_lbl"),
             bg=P["bg_panel"], fg=P["text_muted"], font=(self.ui_font, 8, "bold")
         ).pack(side="left", padx=(0, 6))
 
-        btn_dp_fore = ttk.Button(direct_part_row, text=self.tr("rev_fore_btn"), command=set_part_forepaw, style="Ghost.TButton")
-        btn_dp_fore.pack(side="left", padx=(0, 4))
+        btn_dp_fore = ttk.Button(part_btns_line, text=self.tr("rev_fore_btn"), command=set_part_forepaw, style="Ghost.TButton")
+        btn_dp_fore.pack(side="left", fill="x", expand=True, padx=2)
         ToolTip(btn_dp_fore, lambda: self.tr("tt_rev_fore"))
 
-        btn_dp_hind = ttk.Button(direct_part_row, text=self.tr("rev_hind_btn"), command=set_part_hindpaw, style="Ghost.TButton")
-        btn_dp_hind.pack(side="left", padx=(0, 4))
+        btn_dp_hind = ttk.Button(part_btns_line, text=self.tr("rev_hind_btn"), command=set_part_hindpaw, style="Ghost.TButton")
+        btn_dp_hind.pack(side="left", fill="x", expand=True, padx=2)
         ToolTip(btn_dp_hind, lambda: self.tr("tt_rev_hind"))
 
-        btn_dp_nose = ttk.Button(direct_part_row, text=self.tr("rev_nose_btn"), command=set_part_nose, style="Ghost.TButton")
-        btn_dp_nose.pack(side="left", padx=(0, 4))
+        btn_dp_nose = ttk.Button(part_btns_line, text=self.tr("rev_nose_btn"), command=set_part_nose, style="Ghost.TButton")
+        btn_dp_nose.pack(side="left", fill="x", expand=True, padx=2)
         ToolTip(btn_dp_nose, lambda: self.tr("tt_rev_nose"))
 
-        btn_dp_tail = ttk.Button(direct_part_row, text=self.tr("rev_tail_btn"), command=set_part_tail, style="Ghost.TButton")
-        btn_dp_tail.pack(side="left", padx=(0, 4))
+        btn_dp_tail = ttk.Button(part_btns_line, text=self.tr("rev_tail_btn"), command=set_part_tail, style="Ghost.TButton")
+        btn_dp_tail.pack(side="left", fill="x", expand=True, padx=2)
         ToolTip(btn_dp_tail, lambda: self.tr("tt_rev_tail"))
 
         tk.Label(
             direct_part_row, text=self.tr("rev_shift_hint"),
-            bg=P["bg_panel"], fg=P["cyan"], font=(self.ui_font, 8)
-        ).pack(side="right", padx=4)
+            bg=P["bg_panel"], fg=P["cyan"], font=(self.ui_font, 8), anchor="w"
+        ).pack(fill="x", pady=(3, 0))
+
+        rev_layout_state = {"mode": None, "last_w": 0}
+
+        def _apply_rev_body_layout(mode, win_w):
+            left_w = min(530, max(350, int(win_w * 0.42)))
+            if rev_layout_state["mode"] != mode:
+                rev_layout_state["mode"] = mode
+                left_outer.grid_forget()
+                right_outer.grid_forget()
+                if mode == "split":
+                    body.grid_rowconfigure(0, weight=1, minsize=260)
+                    body.grid_rowconfigure(1, weight=0, minsize=0)
+                    body.grid_columnconfigure(0, weight=0, minsize=left_w)
+                    body.grid_columnconfigure(1, weight=1, minsize=340)
+                    left_outer.config(width=left_w)
+                    left_outer.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=0)
+                    right_outer.grid(row=0, column=1, sticky="nsew", padx=0, pady=0)
+                else:
+                    body.grid_rowconfigure(0, weight=2, minsize=175)
+                    body.grid_rowconfigure(1, weight=3, minsize=250)
+                    body.grid_columnconfigure(0, weight=1, minsize=280)
+                    body.grid_columnconfigure(1, weight=0, minsize=0)
+                    left_outer.config(width=max(280, win_w - 32))
+                    left_outer.grid(row=0, column=0, sticky="nsew", padx=0, pady=(0, 8))
+                    right_outer.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
+            elif mode == "split":
+                cur_min = body.grid_columnconfigure(0).get("minsize", 0)
+                if abs(left_w - cur_min) >= 6:
+                    body.grid_columnconfigure(0, weight=0, minsize=left_w)
+                    left_outer.config(width=left_w)
+
+        _apply_rev_body_layout("split", 1240)
+
+        def _on_rev_win_configure(event=None):
+            if event is not None and event.widget is not rev_win:
+                return
+            w = rev_win.winfo_width()
+            if w <= 100 or abs(w - rev_layout_state["last_w"]) < 4:
+                return
+            rev_layout_state["last_w"] = w
+            lbl_rev_help.config(wraplength=max(260, w - 40))
+
+            target_mode = rev_layout_state["mode"] or "split"
+            if target_mode == "split" and w < 860:
+                target_mode = "stacked"
+            elif target_mode == "stacked" and w >= 890:
+                target_mode = "split"
+            _apply_rev_body_layout(target_mode, w)
+
+            right_avail_w = (w - 32) if target_mode == "stacked" else (w - min(530, max(350, int(w * 0.42))) - 44)
+            if rev_qbtn_mode[0] == "1row" and right_avail_w < 760:
+                _apply_rev_qbtn_layout("2row")
+            elif rev_qbtn_mode[0] == "2row" and right_avail_w >= 790:
+                _apply_rev_qbtn_layout("1row")
+
+        rev_win.bind("<Configure>", _on_rev_win_configure)
 
         canvas_view.bind("<Shift-Button-1>", on_canvas_shift_click)
 
@@ -8780,9 +9354,6 @@ class PerVideoIDTrackerApp:
             dip_tree.selection_set(ordered_iids[0])
             dip_tree.focus(ordered_iids[0])
             rev_win.after(80, on_select)
-
-        bottom_bar = tk.Frame(rev_win, bg=P["bg_main"], padx=16, pady=8)
-        bottom_bar.pack(fill="x")
 
         def save_to_training_db():
             target_dir = os.path.join(self.output_base_dir, "DLC_Tanitokepek_Export")
