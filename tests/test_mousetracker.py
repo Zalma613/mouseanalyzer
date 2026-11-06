@@ -608,5 +608,83 @@ class TestUltralyticsOfflineAndTrainerHardening(unittest.TestCase):
                 self.assertFalse(os.path.exists(created_dirs[0]))
 
 
+class TestReviewAndRefactoringImprovements(unittest.TestCase):
+    def test_roi_config_dataclass_and_legacy_sequence_compatibility(self):
+        cfg = mt.ROIConfig(
+            rx=10, ry=20, rw=400, rh=200,
+            left_gate_x=50, right_gate_x=350,
+            dark_t=120, diff_t=25,
+            ladder_t=105, fault_pct=70,
+            z_active=True, kin_active=True,
+            dip_cooldown_sec=0.45, dip_min_dist_px=28,
+            gate_dist_cm=60.0, px_per_cm=5.0,
+            frame_stride=2, use_gpu=False, use_kalman=True,
+            bidirectional=True, protocol_runs="5 Runs", lock_lr=False
+        )
+        self.assertEqual(len(cfg), 22)
+        self.assertEqual(cfg.target_runs, 5)
+        self.assertEqual(cfg[:4], (10, 20, 400, 200))
+        self.assertIs(mt.ROIConfig.from_sequence(cfg), cfg)
+
+        # Legacy 19-element tuple compatibility
+        legacy_19 = cfg.as_tuple()[:19]
+        parsed_19 = mt.ROIConfig.from_sequence(legacy_19)
+        self.assertEqual(parsed_19.rx, 10)
+        self.assertFalse(parsed_19.bidirectional)
+        self.assertEqual(parsed_19.target_runs, 3)
+        self.assertTrue(parsed_19.lock_lr)
+
+        # Legacy 20-element tuple compatibility
+        legacy_20 = cfg.as_tuple()[:20]
+        parsed_20 = mt.ROIConfig.from_sequence(legacy_20)
+        self.assertTrue(parsed_20.bidirectional)
+        self.assertEqual(parsed_20.target_runs, 3)
+
+    def test_resolve_limb_subtype_language_independent(self):
+        resolve = mt.DLCAddonManager.resolve_limb_subtype
+        self.assertEqual(resolve("PAW", "MELLSŐ LÁB (Lábhiba)"), "FOREPAW")
+        self.assertEqual(resolve("PAW", "HÁTSÓ LÁB (Lábhiba)"), "HINDPAW")
+        self.assertEqual(resolve("PAW", "Forelimb slip", None), "FOREPAW")
+        self.assertEqual(resolve("PAW", "Hindpaw slip", None), "HINDPAW")
+        self.assertEqual(resolve("PAW", "Custom Label", "HINDPAW"), "HINDPAW")
+        self.assertEqual(resolve("PAW", "Custom Label", "FOREPAW"), "FOREPAW")
+        self.assertEqual(resolve("NOSE", "ORR (Exploráció)"), "NOSE")
+        self.assertEqual(resolve("HIND_TAIL", "FAROK (Billenés)"), "HIND_TAIL")
+
+    def test_dns_rebinding_peer_socket_validation(self):
+        class _FakeSocket:
+            def __init__(self, peer_ip):
+                self._peer_ip = peer_ip
+            def getpeername(self):
+                return (self._peer_ip, 443)
+
+        class _FakeRaw:
+            def __init__(self, sock):
+                self._sock = sock
+
+        class _FakeFp:
+            def __init__(self, sock):
+                self.raw = _FakeRaw(sock)
+
+        class _FakeResp:
+            def __init__(self, peer_ip):
+                self.fp = _FakeFp(_FakeSocket(peer_ip))
+                self.closed = False
+            def close(self):
+                self.closed = True
+
+        # Safe public IP passes
+        safe_resp = _FakeResp("93.184.216.34")
+        mt.CloudVideoResolver._validate_peer_socket(safe_resp)
+        self.assertFalse(safe_resp.closed)
+
+        # DNS rebinding to loopback / private IP after initial resolution is blocked and closed
+        for unsafe_ip in ("127.0.0.1", "10.0.0.1", "169.254.169.254"):
+            rebinding_resp = _FakeResp(unsafe_ip)
+            with self.assertRaises(ValueError):
+                mt.CloudVideoResolver._validate_peer_socket(rebinding_resp)
+            self.assertTrue(rebinding_resp.closed)
+
+
 if __name__ == "__main__":
     unittest.main()
