@@ -413,6 +413,7 @@ class TestUltralyticsOfflineAndTrainerHardening(unittest.TestCase):
                 f.write(valid_payload)
 
             with unittest.mock.patch.dict(os.environ, {"APPDATA": tmp_appdata}), \
+                 unittest.mock.patch.object(mt, "_WINDOWS_SYSTEM_ARIAL_FONT", os.path.join(tmp_assets, "no_win_arial.ttf")), \
                  unittest.mock.patch.object(mt, "get_resource_path", return_value=bundled_font):
                 mt.ensure_ultralytics_font()
 

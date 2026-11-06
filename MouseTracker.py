@@ -208,6 +208,9 @@ def _get_torch():
     return _TORCH_MODULE
 
 
+_WINDOWS_SYSTEM_ARIAL_FONT = "C:/Windows/Fonts/arial.ttf"
+
+
 def ensure_ultralytics_font():
     """Ensures Arial.ttf exists in Ultralytics config dir to prevent HTTP 416 download crashes,
     configures Ultralytics offline mode, and monkeypatches check_font as a fail-safe."""
@@ -223,7 +226,7 @@ def ensure_ultralytics_font():
 
         if not target_font.exists():
             # 1. Try native Windows font
-            win_font = Path("C:/Windows/Fonts/arial.ttf")
+            win_font = Path(_WINDOWS_SYSTEM_ARIAL_FONT)
             if win_font.exists():
                 shutil.copy2(win_font, target_font)
             else:
