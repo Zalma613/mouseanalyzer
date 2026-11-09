@@ -86,7 +86,17 @@ ruff check --select E9,F,B MouseTracker.py tests/test_mousetracker.py
 
 ---
 
-## 📦 Release Notes (`v1.4.7`)
+## 📦 Release Notes (`v1.4.8`)
+
+* **Windows `.exe` Compatibility & High-DPI Hardening:**
+  * Added native Windows Per-Monitor High-DPI awareness (`shcore.SetProcessDpiAwareness` with `user32.SetProcessDPIAware` fallback) in `configure_native_os_identity`.
+  * Added Unicode-safe `PhotoImage` fallback in `apply_window_icon` when `iconbitmap` encounters paths with accented characters, plus automatic `OneDrive/Documents` fallback in `get_safe_base_dir` and writable `APPDATA\Ultralytics` config initialization (`_ensure_writable_yolo_config_dir`).
+* **Detection & Kalman Tracking Improvements:**
+  * Preserved pink-paw pixels across ladder rungs, supported 1D elastic fault-curve arrays in `_detect_mouse_on_crop` and `_check_real_dip_below_line`, and added frame-age expiration (`max_age`) to prevent stale AI poses from creating ghost detections.
+  * Added `dt_frames` velocity extrapolation and single-frame outlier damping to `MouseKalmanTracker.predict_next` and `MouseKalmanTracker.update`.
+  * Expanded automated test coverage to 36 unit, security, Windows runtime, and end-to-end `.exe` pipeline simulation tests.
+
+### Previous Release (`v1.4.7`)
 
 * **Responsive UI & Anti-Jitter Architecture:**
   * **Eliminated Section Jumping:** Locked Tkinter geometry propagation (`pack_propagate(False)`) across KPI strip cards, main workspace panels (`list_outer`, `ctrl_outer`), and child inspector panels (`left_outer`, `right_outer`), and isolated dynamic hover hints (`lbl_annot_hint`) onto dedicated status lines so text updates never shift adjacent sections or buttons.

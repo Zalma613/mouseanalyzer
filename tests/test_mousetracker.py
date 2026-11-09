@@ -741,11 +741,404 @@ class TestReviewAndRefactoringImprovements(unittest.TestCase):
             short_txt = app._format_output_dir_text(max_chars=45)
             self.assertIn("...", short_txt)
             self.assertLessEqual(len(short_txt), 48)
+
+            # Queue control state toggling must disable/enable the actual UI buttons
+            app._set_queue_controls_state("disabled")
+            for btn_name in (
+                "btn_add_vid",
+                "btn_add_url",
+                "btn_edit_id",
+                "btn_remove_vid",
+                "btn_clear_vid",
+                "btn_load_prof_main",
+                "btn_save_prof_main",
+                "btn_train_ai",
+                "btn_change_dir",
+            ):
+                btn_widget = getattr(app, btn_name, None)
+                self.assertIsNotNone(btn_widget, f"Missing button {btn_name}")
+                self.assertIn("disabled", str(btn_widget.cget("state")))
+
+            app._set_queue_controls_state("normal")
+            for btn_name in ("btn_add_vid", "btn_add_url", "btn_edit_id", "btn_remove_vid", "btn_clear_vid"):
+                btn_widget = getattr(app, btn_name)
+                self.assertIn("normal", str(btn_widget.cget("state")))
         finally:
             try:
                 root.destroy()
             except mt.tk.TclError:
                 pass
+
+    @staticmethod
+    def _make_headless_detector():
+        app = mt.PerVideoIDTrackerApp.__new__(mt.PerVideoIDTrackerApp)
+        app.kernel_small = np.ones((3, 3), np.uint8)
+        app.kernel_grad_3 = np.ones((3, 3), np.uint8)
+        app.kernel_horiz = np.ones((5, 19), np.uint8)
+        app.kernel_upper_bridge = np.ones((5, 29), np.uint8)
+        app.kernel_fill = np.ones((7, 7), np.uint8)
+        app.kernel_blackhat_13 = mt.cv2.getStructuringElement(mt.cv2.MORPH_RECT, (13, 13))
+        app.kernel_torso_open = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (7, 7))
+        app._run_flags = {"use_yolo_fusion": False, "lock_lr_active": False, "use_comma": True}
+        with unittest.mock.patch.object(mt.ParallelYoloOpenCVEngine, "_init_yolo", return_value=None):
+            app.hybrid_locator = mt.ParallelYoloOpenCVEngine(lambda _: None)
+        return app
+
+    def test_detect_mouse_preserves_pink_paw_on_rung_and_supports_1d_fault_curve(self):
+        app = self._make_headless_detector()
+        rh, rw = 160, 260
+        fault_y = 112
+        fault_curve = np.full(rw, fault_y, dtype=np.int32)
+
+        # Bright background with a dark ladder rung right at fault_y
+        base_gray = np.full((rh, rw), 220, dtype=np.uint8)
+        base_gray[fault_y - 3:fault_y + 4, 128:136] = 45
+        ladder_mask = app._create_ladder_mask(base_gray, ladder_thresh=140, fault_y_local=fault_curve)
+        inv_ladder_mask = mt.cv2.bitwise_not(ladder_mask)
+        # Ensure the rung is masked out in raw inv_ladder_mask
+        self.assertEqual(int(inv_ladder_mask[fault_y, 132]), 0)
+
+        # Simulate a +6 camera exposure shift on the current frame + dark mouse torso + pink paw on & below the rung
+        crop = np.full((rh, rw, 3), 226, dtype=np.uint8)
+        crop[fault_y - 3:fault_y + 4, 128:136] = (50, 50, 50)
+        # Mouse torso above fault line (with a bright fur highlight in the middle to test cavity filling)
+        mt.cv2.ellipse(crop, (130, 74), (44, 24), 0, 0, 360, (38, 38, 38), -1)
+        mt.cv2.circle(crop, (130, 72), 5, (215, 215, 215), -1)
+        # Pink limb extending from ventral torso (y=96) across the rung (fault_y=112) down to y=128
+        crop[96:128, 129:136] = (115, 118, 215)
+
+        detected, mask, bbox, skin_map = app._detect_mouse_on_crop(
+            crop,
+            base_gray,
+            inv_ladder_mask,
+            rw,
+            rh,
+            dark_t=155,
+            diff_t=24,
+            fault_y_local=fault_curve,
+            return_skin=True,
+            use_yolo=False,
+        )
+        self.assertTrue(detected)
+        self.assertIsNotNone(mask)
+        self.assertIsNotNone(bbox)
+        self.assertIsNotNone(skin_map)
+        # Internal specular highlight cavity at (72, 130) must be filled inside the upper torso
+        self.assertGreater(int(mask[72, 130]), 0)
+        # Pink paw pixels on the rung (y=fault_y, x=132) and below it (y=124, x=132) must NOT be erased by inv_ladder_mask
+        self.assertGreater(int(mask[fault_y, 132]), 0)
+        self.assertGreater(int(mask[124, 132]), 0)
+
+        # Shallow pink paw slip (depth ~11-15px below fault_y) must be detected as a real PAW dip
+        is_dip, dip_x, dip_y, _aspect, dip_depth, dip_meta = app._check_real_dip_below_line(
+            mask,
+            fault_curve,
+            crop=crop,
+            bbox=bbox,
+            inv_ladder_mask=inv_ladder_mask,
+            move_dir=1.0,
+            return_meta=True,
+            skin_map=skin_map,
+            base_gray=base_gray,
+        )
+        self.assertTrue(is_dip)
+        self.assertEqual(dip_meta["dlc_code"], "PAW")
+        self.assertGreaterEqual(dip_depth, 10.0)
+        self.assertTrue(126 <= dip_x <= 138)
+        self.assertGreater(dip_y, fault_y)
+
+    def test_stale_pose_is_not_reused_as_ghost_mouse(self):
+        app = self._make_headless_detector()
+        rh, rw = 160, 260
+        base_gray = np.full((rh, rw), 220, dtype=np.uint8)
+        inv_ladder_mask = np.full((rh, rw), 255, dtype=np.uint8)
+        empty_crop = np.full((rh, rw, 3), 220, dtype=np.uint8)
+
+        app.hybrid_locator.is_rodent_pose = True
+        stale_pose = {
+            "bbox": (80, 50, 80, 40),
+            "nose_pt": (155, 70),
+            "head_pt": (145, 65),
+            "shoulder_pt": (130, 68),
+            "spine_mid": (115, 66),
+            "hip_pt": (98, 68),
+            "tail_base": (85, 70),
+            "tail_mid": (70, 70),
+            "tail_tip": (55, 70),
+            "fore_paw_pt": (130, 92),
+            "hind_paw_pt": (98, 92),
+            "tail_chain": [(55, 70), (70, 70), (85, 70)],
+            "frame_idx": 10,
+        }
+        app.hybrid_locator._set_thread_pose("vid_1", stale_pose, 10)
+        # Also plant a pose on another stream / sync slot to verify no cross-stream leakage
+        app.hybrid_locator.last_sync_pose = dict(stale_pose, frame_idx=100)
+
+        # Querying at frame_idx=50 with max_age=5 must reject the stale pose from frame 10
+        pose_lookup = app.hybrid_locator.get_latest_pose_for_bbox(
+            0, 0, rw, rh, rw, rh, stream_id="vid_1", frame_idx=50, max_age=5
+        )
+        self.assertIsNone(pose_lookup)
+
+        detected, mask, bbox = app._detect_mouse_on_crop(
+            empty_crop,
+            base_gray,
+            inv_ladder_mask,
+            rw,
+            rh,
+            dark_t=155,
+            diff_t=24,
+            fault_y_local=112,
+            stream_id="vid_1",
+            frame_idx=50,
+            ai_max_age=5,
+            use_yolo=False,
+        )
+        self.assertFalse(detected)
+        self.assertIsNone(mask)
+        self.assertIsNone(bbox)
+
+    def test_kalman_tracker_predict_next_and_outlier_rejection(self):
+        kf = mt.MouseKalmanTracker()
+        x0, y0 = kf.update(100, 80)
+        self.assertEqual((x0, y0), (100, 80))
+        x1, y1 = kf.update(112, 80)
+        pred_x, pred_y = kf.predict_next()
+        self.assertGreaterEqual(pred_x, 100)
+        self.assertTrue(60 <= pred_y <= 100)
+        pred_x_dt, pred_y_dt = kf.predict_next(dt_frames=2)
+        self.assertGreaterEqual(pred_x_dt, pred_x)
+        self.assertTrue(60 <= pred_y_dt <= 100)
+
+        # Single-frame extreme outlier jump (> 95px) is damped before corrupting the state
+        x_jump, _ = kf.update(500, 80, dt_frames=1)
+        self.assertLess(x_jump, 300)
+
+    def test_fmt_num_uses_thread_safe_run_flags(self):
+        app = mt.PerVideoIDTrackerApp.__new__(mt.PerVideoIDTrackerApp)
+        app._run_flags = {"use_comma": False}
+        self.assertEqual(app._fmt_num(12.345, "{:.2f}"), "12.35")
+        app._run_flags = {"use_comma": True}
+        self.assertEqual(app._fmt_num(12.345, "{:.2f}"), "12,35")
+
+
+class TestWindowsPlatformCompatibility(unittest.TestCase):
+    """Tests Windows-specific runtime paths (win32 identity/DPI, iconbitmap, APPDATA, _MEIPASS, CUDA, startfile)."""
+
+    def test_windows_native_os_identity_and_high_dpi(self):
+        fake_windll = unittest.mock.MagicMock()
+        with (
+            unittest.mock.patch.object(mt.sys, "platform", "win32"),
+            unittest.mock.patch.object(mt.ctypes, "windll", fake_windll, create=True),
+        ):
+            mt.configure_native_os_identity()
+            fake_windll.shell32.SetCurrentProcessExplicitAppUserModelID.assert_called_once_with(mt.APP_ID)
+            fake_windll.shcore.SetProcessDpiAwareness.assert_called_once_with(1)
+
+        # Fallback to user32.SetProcessDPIAware() when shcore raises OSError
+        fake_windll_fallback = unittest.mock.MagicMock()
+        fake_windll_fallback.shcore.SetProcessDpiAwareness.side_effect = OSError("shcore unavailable")
+        with (
+            unittest.mock.patch.object(mt.sys, "platform", "win32"),
+            unittest.mock.patch.object(mt.ctypes, "windll", fake_windll_fallback, create=True),
+        ):
+            mt.configure_native_os_identity()
+            fake_windll_fallback.user32.SetProcessDPIAware.assert_called_once()
+
+    def test_windows_apply_window_icon_and_unicode_fallback(self):
+        fake_root = unittest.mock.MagicMock()
+        with unittest.mock.patch.object(mt.sys, "platform", "win32"):
+            mt.apply_window_icon(fake_root)
+            fake_root.iconbitmap.assert_called_once()
+            arg_ico = fake_root.iconbitmap.call_args.kwargs.get("default", "")
+            self.assertTrue(arg_ico.endswith("icon.ico"))
+
+        # Test fallback when iconbitmap raises TclError on a path with Hungarian accents
+        with tempfile.TemporaryDirectory(prefix="Mérés_Ékezetes_") as tmp_dir:
+            unicode_ico = os.path.join(tmp_dir, "icon.ico")
+            dummy_img = np.full((32, 32, 3), 128, dtype=np.uint8)
+            _ok, png_buf = mt.cv2.imencode(".png", dummy_img)
+            png_buf.tofile(unicode_ico)
+            fake_root_fb = unittest.mock.MagicMock()
+            fake_root_fb.iconbitmap.side_effect = mt.tk.TclError("iconbitmap failed")
+            with (
+                unittest.mock.patch.object(mt.sys, "platform", "win32"),
+                unittest.mock.patch.object(mt, "get_resource_path", return_value=unicode_ico),
+                unittest.mock.patch.object(mt.tk, "PhotoImage", return_value="fake_photo") as mock_photo,
+            ):
+                mt.apply_window_icon(fake_root_fb)
+                mock_photo.assert_called_once()
+                fake_root_fb.iconphoto.assert_called_once_with(True, "fake_photo")
+
+    def test_windows_appdata_yolo_config_and_meipass_bundle(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            win_appdata = os.path.join(tmpdir, "AppData", "Roaming")
+            meipass_dir = os.path.join(tmpdir, "_MEI12345")
+            os.makedirs(os.path.join(meipass_dir, "assets"), exist_ok=True)
+            bundled_ico = os.path.join(meipass_dir, "assets", "icon.ico")
+            with open(bundled_ico, "wb") as f:
+                f.write(b"fake_ico_data")
+
+            with (
+                unittest.mock.patch.dict(os.environ, {"APPDATA": win_appdata}, clear=False),
+                unittest.mock.patch.object(mt.sys, "_MEIPASS", meipass_dir, create=True),
+                unittest.mock.patch.object(mt.sys, "platform", "win32"),
+            ):
+                os.environ.pop("YOLO_CONFIG_DIR", None)
+                u_dir = mt._ensure_writable_yolo_config_dir()
+                self.assertEqual(str(u_dir), os.path.join(win_appdata, "Ultralytics"))
+                self.assertEqual(os.environ.get("YOLO_CONFIG_DIR"), os.path.join(win_appdata, "Ultralytics"))
+                resolved_ico = mt.get_resource_path("icon.ico")
+                self.assertEqual(resolved_ico, bundled_ico)
+
+    def test_windows_open_results_folder_and_onedrive_documents(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = mt.PerVideoIDTrackerApp.__new__(mt.PerVideoIDTrackerApp)
+            app.output_base_dir = os.path.join(tmpdir, "Kimenet_Árvíztűrő")
+            mock_startfile = unittest.mock.MagicMock()
+            with (
+                unittest.mock.patch.object(mt.sys, "platform", "win32"),
+                unittest.mock.patch.object(mt.os, "startfile", mock_startfile, create=True),
+            ):
+                app.open_results_folder()
+                mock_startfile.assert_called_once_with(os.path.abspath(app.output_base_dir))
+
+            # Verify OneDrive/Documents fallback when ~/Documents is absent on Windows
+            fake_home = os.path.join(tmpdir, "WinUser")
+            onedrive_docs = os.path.join(fake_home, "OneDrive", "Documents")
+            os.makedirs(onedrive_docs, exist_ok=True)
+            with unittest.mock.patch.object(mt.os.path, "expanduser", return_value=fake_home):
+                safe_dir = mt.get_safe_base_dir("MouseAnalyzer_Eredmenyek")
+                self.assertEqual(safe_dir, os.path.join(onedrive_docs, "MouseAnalyzer_Eredmenyek"))
+                self.assertTrue(os.path.isdir(safe_dir))
+
+    def test_windows_cuda_compute_device_detection(self):
+        fake_torch = unittest.mock.MagicMock()
+        fake_torch.backends.mps.is_available.return_value = False
+        fake_torch.cuda.is_available.return_value = True
+        fake_torch.cuda.device_count.return_value = 1
+        fake_torch.cuda.get_device_name.return_value = "NVIDIA GeForce RTX 4070"
+        with (
+            unittest.mock.patch.object(mt.sys, "platform", "win32"),
+            unittest.mock.patch.object(mt, "_CACHED_COMPUTE_DEVICE", None),
+            unittest.mock.patch.object(mt, "_get_torch", return_value=fake_torch),
+        ):
+            dev_info = mt.get_optimal_compute_device()
+            self.assertEqual(dev_info["device"], "cuda:0")
+            self.assertEqual(dev_info["type"], "cuda")
+            self.assertTrue(dev_info["has_gpu"])
+            self.assertIn("RTX 4070", dev_info["name"])
+
+    def test_end_to_end_exe_simulation_pipeline_and_export(self):
+        """Simulates a frozen Windows .exe run across a synthetic rodent ladder video from start gate to CSV/heatmap export."""
+        with tempfile.TemporaryDirectory(prefix="ExeSim_E2E_") as tmpdir:
+            video_path = os.path.join(tmpdir, "Sim_Mouse_01.mp4")
+            output_dir = os.path.join(tmpdir, "MouseAnalyzer_Eredmenyek")
+            os.makedirs(output_dir, exist_ok=True)
+
+            width, height, fps = 640, 240, 30
+            rx, ry, rw, rh = 40, 40, 560, 160
+            fault_y = ry + 112  # y=152
+
+            fourcc = mt.cv2.VideoWriter_fourcc(*"mp4v")
+            writer = mt.cv2.VideoWriter(video_path, fourcc, fps, (width, height))
+            self.assertTrue(writer.isOpened())
+
+            def _bg_frame():
+                frm = np.full((height, width, 3), 225, dtype=np.uint8)
+                mt.cv2.line(frm, (rx, fault_y + 2), (rx + rw, fault_y + 2), (160, 160, 160), 2)
+                for rung_x in range(rx + 20, rx + rw - 10, 28):
+                    mt.cv2.rectangle(frm, (rung_x - 3, fault_y - 3), (rung_x + 3, fault_y + 4), (55, 55, 55), -1)
+                return frm
+
+            for _ in range(50):
+                writer.write(_bg_frame())
+
+            xs = (
+                np.linspace(100, 280, 36).astype(int).tolist()
+                + [280] * 12
+                + np.linspace(286, 555, 48).astype(int).tolist()
+            )
+            for mx in xs:
+                frm = _bg_frame()
+                torso_cy = fault_y - 28
+                mt.cv2.ellipse(frm, (mx, torso_cy), (46, 22), 0, 0, 360, (32, 32, 32), -1)
+                mt.cv2.ellipse(frm, (mx + 42, torso_cy + 3), (18, 13), 10, 0, 360, (36, 36, 36), -1)
+                mt.cv2.circle(frm, (mx + 58, torso_cy + 5), 4, (130, 135, 225), -1)
+                mt.cv2.rectangle(frm, (mx - 24, fault_y - 12), (mx - 16, fault_y - 2), (118, 122, 215), -1)
+                if 365 <= mx <= 395:
+                    paw_x = mx + 18
+                    mt.cv2.rectangle(frm, (paw_x - 4, fault_y - 16), (paw_x + 4, fault_y + 22), (112, 115, 218), -1)
+                else:
+                    mt.cv2.rectangle(frm, (mx + 14, fault_y - 12), (mx + 22, fault_y - 2), (118, 122, 215), -1)
+                writer.write(frm)
+
+            for _ in range(10):
+                writer.write(_bg_frame())
+            writer.release()
+
+            app = mt.PerVideoIDTrackerApp.__new__(mt.PerVideoIDTrackerApp)
+            app.lang = "hu"
+            app.output_base_dir = output_dir
+            app.is_running = True
+            app.pending_results = []
+            app.gpu_available = False
+            app.gpu_device_name = "CPU"
+            app.kernel_small = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (3, 3))
+            app.kernel_horiz = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (11, 3))
+            app.kernel_upper_bridge = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (15, 7))
+            app.kernel_fill = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (7, 7))
+            app.kernel_rung_close = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (7, 7))
+            app.kernel_sag_guard = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (7, 13))
+            app.kernel_blackhat_13 = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (13, 13))
+            app.kernel_torso_open = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (9, 7))
+            app.kernel_grad_3 = mt.cv2.getStructuringElement(mt.cv2.MORPH_RECT, (3, 3))
+            app.log = lambda _msg: None
+            app.update_row_status = lambda _uid, _st: None
+            app.increment_progress = lambda _tot: None
+            app.reset_ui = lambda: None
+            app.root = unittest.mock.MagicMock()
+
+            with unittest.mock.patch.object(mt.ParallelYoloOpenCVEngine, "_init_yolo", return_value=None):
+                app.hybrid_locator = mt.ParallelYoloOpenCVEngine(app.log)
+            app.auto_engine = mt.AutoAdaptiveLadderEngine(app.log)
+            app.dlc_addon = mt.DLCAddonManager(app.log)
+            app.dlc_addon.dlc_available = False
+
+            app._run_flags = {
+                "use_gpu": False,
+                "auto_calib": False,
+                "use_yolo_fusion": False,
+                "dlc_superanimal": True,
+                "dlc_export_train": False,
+                "enable_review": False,
+                "lock_lr_active": True,
+                "use_comma": True,
+            }
+
+            roi_cfg = mt.ROIConfig(
+                rx=rx, ry=ry, rw=rw, rh=rh,
+                left_gate_x=95, right_gate_x=545,
+                dark_t=155, diff_t=24, ladder_t=130, fault_pct=70,
+                z_active=True, kin_active=True,
+                dip_cooldown_sec=0.40, dip_min_dist_px=25,
+                gate_dist_cm=60.0, px_per_cm=(545 - 95) / 60.0,
+                frame_stride=1, use_gpu=False, use_kalman=True,
+                bidirectional=False, protocol_runs="1", lock_lr=True,
+            )
+
+            video_queue = [{"uid": "v1", "name": "Sim_Mouse_01.mp4", "id": "Mouse_Sim_01", "path": video_path}]
+            app.execute_parallel_processing(video_queue, roi_cfg, max_workers=1)
+            self.assertEqual(len(app.pending_results), 1)
+            self.assertEqual(len(app.pending_results[0]["runs"]), 1)
+
+            app._export_worker()
+            master_csv = os.path.join(output_dir, "Minden_Egyed_Meresi_Adatai.csv")
+            self.assertTrue(os.path.exists(master_csv))
+            subj_dir = os.path.join(output_dir, "Egyed_Mouse_Sim_01_eredmenyek")
+            self.assertTrue(os.path.exists(os.path.join(subj_dir, "egyed_Mouse_Sim_01_meresi_adatok.csv")))
+            self.assertTrue(os.path.exists(os.path.join(subj_dir, "egyed_Mouse_Sim_01_futas_1_heatmap.jpg")))
+            self.assertTrue(os.path.exists(os.path.join(subj_dir, "egyed_Mouse_Sim_01_futas_1_lenyulas_1.jpg")))
 
 
 if __name__ == "__main__":

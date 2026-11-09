@@ -181,10 +181,28 @@ def ensure_safe_torchvision_nms():
         logger.debug("Failed to patch torchvision.ops.nms: %s", e)
 
 
+def _ensure_writable_yolo_config_dir():
+    """Ensures YOLO_CONFIG_DIR points to a writable directory to avoid permission errors in sandboxes/macOS."""
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        u_dir = Path(appdata) / "Ultralytics"
+    else:
+        base_dir = globals().get("SAFE_BASE_DIR") or tempfile.gettempdir()
+        u_dir = Path(base_dir) / "Ultralytics"
+    try:
+        u_dir.mkdir(parents=True, exist_ok=True)
+        if not os.environ.get("YOLO_CONFIG_DIR"):
+            os.environ["YOLO_CONFIG_DIR"] = str(u_dir)
+    except OSError as e:
+        logger.debug("Could not initialize YOLO_CONFIG_DIR at %s: %s", u_dir, e)
+    return u_dir
+
+
 def _allowlist_ultralytics_torch_globals():
     """Allowlists Ultralytics model classes for PyTorch 2.6+ weights_only=True unpickling."""
     try:
         os.environ.setdefault("YOLO_OFFLINE", "true")
+        _ensure_writable_yolo_config_dir()
         import torch
         from ultralytics.nn.tasks import PoseModel, DetectionModel
         if hasattr(torch, "serialization") and hasattr(torch.serialization, "add_safe_globals"):
@@ -218,22 +236,31 @@ def ensure_ultralytics_font():
         appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
         u_dir = Path(appdata) / "Ultralytics"
         u_dir.mkdir(parents=True, exist_ok=True)
-        target_font = u_dir / "Arial.ttf"
+        cfg_dir = _ensure_writable_yolo_config_dir()
+        if os.environ.get("APPDATA"):
+            os.environ["YOLO_CONFIG_DIR"] = str(u_dir)
+        target_dirs = [u_dir]
+        if cfg_dir != u_dir:
+            target_dirs.append(cfg_dir)
 
-        # Purge 0-byte or corrupted partial files (< 10 KB) that trigger HTTP 416
-        if target_font.exists() and target_font.stat().st_size < 10000:
-            target_font.unlink(missing_ok=True)
+        for t_dir in target_dirs:
+            t_dir.mkdir(parents=True, exist_ok=True)
+            target_font = t_dir / "Arial.ttf"
 
-        if not target_font.exists():
-            # 1. Try native Windows font
-            win_font = Path(_WINDOWS_SYSTEM_ARIAL_FONT)
-            if win_font.exists():
-                shutil.copy2(win_font, target_font)
-            else:
-                # 2. Try bundled assets folder
-                bundled = Path(get_resource_path("Arial.ttf"))
-                if bundled.exists():
-                    shutil.copy2(bundled, target_font)
+            # Purge 0-byte or corrupted partial files (< 10 KB) that trigger HTTP 416
+            if target_font.exists() and target_font.stat().st_size < 10000:
+                target_font.unlink(missing_ok=True)
+
+            if not target_font.exists():
+                # 1. Try native Windows font
+                win_font = Path(_WINDOWS_SYSTEM_ARIAL_FONT)
+                if win_font.exists():
+                    shutil.copy2(win_font, target_font)
+                else:
+                    # 2. Try bundled assets folder
+                    bundled = Path(get_resource_path("Arial.ttf"))
+                    if bundled.exists():
+                        shutil.copy2(bundled, target_font)
     except Exception as e:
         logger.debug("Font pre-seed exception: %s", e)
 
@@ -286,12 +313,19 @@ def get_resource_path(relative_path):
 
 
 def configure_native_os_identity():
-    """Configures native OS app identity for taskbars and dock."""
+    """Configures native OS app identity and High-DPI awareness for Windows taskbars and macOS Dock."""
     if sys.platform == "win32":
         try:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
         except (AttributeError, OSError) as e:
             logger.debug("Win32 AppUserModelID configuration failed: %s", e)
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except (AttributeError, OSError):
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except (AttributeError, OSError) as e:
+                logger.debug("Win32 DPI awareness configuration skipped: %s", e)
     elif sys.platform == "darwin":
         try:
             from Foundation import NSBundle
@@ -326,10 +360,15 @@ def apply_window_icon(root):
         except (ImportError, AttributeError, OSError) as e:
             logger.debug("macOS NSApplication icon set failed: %s", e)
 
-    # Consolidated cross-platform / fallback PhotoImage icon
+    # Consolidated cross-platform / fallback PhotoImage icon (Unicode-safe for Windows paths with accents)
     if os.path.exists(ico_path):
         try:
-            img = cv2.imread(ico_path, cv2.IMREAD_UNCHANGED)
+            raw_bytes = np.fromfile(ico_path, dtype=np.uint8)
+            img = cv2.imdecode(raw_bytes, cv2.IMREAD_UNCHANGED) if raw_bytes.size > 0 else None
+            if img is None and raw_bytes.size > 8:
+                png_offset = raw_bytes.tobytes().find(b"\x89PNG\r\n\x1a\n")
+                if png_offset >= 0:
+                    img = cv2.imdecode(raw_bytes[png_offset:], cv2.IMREAD_UNCHANGED)
             if img is not None:
                 ok, buf = cv2.imencode(".png", img)
                 if ok:
@@ -345,12 +384,17 @@ def apply_window_icon(root):
 def get_safe_base_dir(folder_name="MouseAnalyzer_Eredmenyek"):
     """
     Returns an absolute, writable directory path for application results and cache.
-    Prefers ~/Documents/MouseAnalyzer_Eredmenyek, falling back to ~ or tempdir if needed.
-    Does not mutate process working directory.
+    Prefers ~/Documents/MouseAnalyzer_Eredmenyek (or OneDrive/Documents on Windows),
+    falling back to ~ or tempdir if needed. Does not mutate process working directory.
     """
-    docs_dir = os.path.expanduser("~/Documents")
+    home_dir = os.path.expanduser("~")
+    docs_dir = os.path.join(home_dir, "Documents")
     if not os.path.exists(docs_dir) or not os.access(docs_dir, os.W_OK):
-        docs_dir = os.path.expanduser("~")
+        onedrive_docs = os.path.join(home_dir, "OneDrive", "Documents")
+        if os.path.exists(onedrive_docs) and os.access(onedrive_docs, os.W_OK):
+            docs_dir = onedrive_docs
+        else:
+            docs_dir = home_dir
     safe_dir = os.path.join(docs_dir, folder_name)
     try:
         os.makedirs(safe_dir, exist_ok=True)
@@ -1517,6 +1561,8 @@ class MouseKalmanTracker:
         self.kf.processNoiseCov = np.eye(4, dtype=np.float32) * 0.03
         self.kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 0.4
         self.initialized = False
+        self.last_x = 0
+        self.last_y = 0
 
     def reset(self, x, y):
         self.kf.statePost = np.array([[np.float32(x)],
@@ -1525,15 +1571,40 @@ class MouseKalmanTracker:
                                       [0.0]], dtype=np.float32)
         self.kf.errorCovPost = np.eye(4, dtype=np.float32)
         self.initialized = True
+        self.last_x = int(x)
+        self.last_y = int(y)
 
-    def update(self, x, y):
+    def predict_next(self, dt_frames=1.0):
+        if not self.initialized:
+            return None
+        dt = float(np.clip(dt_frames, 1.0, 6.0))
+        state = self.kf.statePost
+        px = float(state[0, 0] + state[2, 0] * dt)
+        py = float(state[1, 0] + state[3, 0] * dt)
+        return int(round(px)), int(round(py))
+
+    def update(self, x, y, dt_frames=1.0):
         if not self.initialized:
             self.reset(x, y)
             return int(x), int(y)
-        self.kf.predict()
+        dt = float(np.clip(dt_frames, 1.0, 6.0))
+        self.kf.transitionMatrix[0, 2] = dt
+        self.kf.transitionMatrix[1, 3] = dt
+        pred = self.kf.predict()
+        # Gate extreme single-step centroid spikes while preserving fast sprints
+        max_jump = 95.0 * dt
+        dx = float(x) - float(pred[0, 0])
+        dy = float(y) - float(pred[1, 0])
+        dist = float(np.hypot(dx, dy))
+        if dist > max_jump and dist > 1e-3:
+            scale = max_jump / dist
+            x = float(pred[0, 0]) + dx * scale
+            y = float(pred[1, 0]) + dy * scale
         meas = np.array([[np.float32(x)], [np.float32(y)]], dtype=np.float32)
         est = self.kf.correct(meas)
-        return int(est[0, 0]), int(est[1, 0])
+        self.last_x = int(round(float(est[0, 0])))
+        self.last_y = int(round(float(est[1, 0])))
+        return self.last_x, self.last_y
 
 
 class AsyncVideoReader:
@@ -2121,16 +2192,20 @@ class ParallelYoloOpenCVEngine:
                 return yolo_bbox, yolo_seg_mask, result_age
             return None, None, result_age
 
-    def get_latest_pose_for_bbox(self, bx, by, bw, bh, mw, mh, stream_id=None):
+    def get_latest_pose_for_bbox(self, bx, by, bw, bh, mw, mh, stream_id=None, frame_idx=None, max_age=None):
         if not self.is_rodent_pose:
             return None
 
         pose = None
+        pose_frame = None
         if stream_id is not None:
             with self.stream_lock:
                 entry = self.latest_pose_by_stream.get(stream_id)
                 if entry is not None:
-                    pose = entry[0]
+                    pose, pose_frame = entry[0], entry[1]
+            if frame_idx is not None and max_age is not None and pose_frame is not None:
+                if (int(frame_idx) - int(pose_frame)) > int(max_age):
+                    return None
         else:
             pose = getattr(self._tls, "last_pose", None) or self.last_sync_pose
 
@@ -2147,24 +2222,69 @@ class ParallelYoloOpenCVEngine:
             self.stream_states.pop(stream_id, None)
             self.latest_pose_by_stream.pop(stream_id, None)
 
+    @staticmethod
+    def _estimate_illumination_shift(gray_smooth, base_smooth, torso_bottom=None, previous_bbox=None):
+        """
+        Estimates global ambient illumination / auto-exposure shift (in gray levels)
+        between base_smooth and gray_smooth using background-like peripheral samples.
+        Returns a clamped integer offset in [-12, +12] to add to base_smooth.
+        """
+        if torso_bottom is None:
+            torso_bottom = max(8, int(gray_smooth.shape[0] * 0.72) - 8)
+        g_sub = gray_smooth[:max(8, int(torso_bottom)):4, ::8].astype(np.int16)
+        b_sub = base_smooth[:max(8, int(torso_bottom)):4, ::8].astype(np.int16)
+        if g_sub.size < 16 or g_sub.shape != b_sub.shape:
+            return 0
+
+        bg_like = (np.abs(g_sub - b_sub) <= 18) & (b_sub >= 75)
+        if previous_bbox is not None:
+            px, _py, pw, _ph = previous_bbox
+            c0 = max(0, int(px) // 8 - 1)
+            c1 = min(g_sub.shape[1], int(px + pw) // 8 + 2)
+            if c1 > c0:
+                bg_like[:, c0:c1] = False
+
+        deltas = (g_sub - b_sub)[bg_like]
+        if deltas.size < 12:
+            return 0
+        med_shift = int(round(float(np.median(deltas))))
+        if abs(med_shift) <= 1:
+            return 0
+        return int(np.clip(med_shift, -12, 12))
+
     def locate_animal_roi_and_mask(
         self, crop_bgr, gray_smooth, base_smooth, inv_ladder_mask, fault_y_local,
         dark_t, diff_t, stream_id=None, frame_idx=None, ai_max_age=3, previous_bbox=None,
         static_imperfection_cached=None
     ):
         rh, rw = gray_smooth.shape[:2]
+        if isinstance(fault_y_local, np.ndarray) and fault_y_local.ndim == 1:
+            fault_y_scalar = int(np.clip(round(float(np.median(fault_y_local))), 15, max(16, rh - 2)))
+        else:
+            fault_y_scalar = int(fault_y_local)
 
-        torso_bottom = max(15, int(fault_y_local) - 8)
+        torso_bottom = max(15, fault_y_scalar - 8)
         torso_gray = gray_smooth[:torso_bottom, :]
-        torso_base = base_smooth[:torso_bottom, :]
+        torso_base_raw = base_smooth[:torso_bottom, :]
+        illum_shift = self._estimate_illumination_shift(
+            gray_smooth, base_smooth, torso_bottom, previous_bbox=previous_bbox
+        )
+        if illum_shift != 0:
+            torso_base = np.clip(torso_base_raw.astype(np.int16) + illum_shift, 0, 255).astype(np.uint8)
+        else:
+            torso_base = torso_base_raw
+
         torso_diff = cv2.subtract(torso_base, torso_gray)
         torso_absdiff = cv2.absdiff(torso_base, torso_gray)
+
+        bg_grad = cv2.morphologyEx(torso_base_raw, cv2.MORPH_GRADIENT, self.k_grad_3)
+        fg_grad = cv2.morphologyEx(torso_gray, cv2.MORPH_GRADIENT, self.k_grad_3)
+        edge_gain = cv2.subtract(fg_grad, bg_grad)
 
         if static_imperfection_cached is not None and static_imperfection_cached.shape[0] >= torso_bottom:
             static_imperfection = static_imperfection_cached[:torso_bottom, :]
         else:
-            bg_grad = cv2.morphologyEx(torso_base, cv2.MORPH_GRADIENT, self.k_grad_3)
-            static_imperfection = (torso_base <= min(215, dark_t + 8)) | (bg_grad >= 16)
+            static_imperfection = (torso_base_raw <= min(215, dark_t + 8)) | (bg_grad >= 16)
             static_imperfection = cv2.dilate(
                 static_imperfection.astype(np.uint8) * 255, self.k_open_3, iterations=1
             ) > 0
@@ -2172,11 +2292,13 @@ class ParallelYoloOpenCVEngine:
         seed_diff_t = max(10, int(diff_t * 0.75))
         low_diff_t = max(5, int(diff_t * 0.35))
         blemish_diff_t = max(seed_diff_t + 14, int(diff_t * 1.55))
+        edge_seed_t = max(12, int(diff_t * 0.65))
 
         valid_seed_bool = (
             ((torso_diff >= seed_diff_t) & (torso_gray <= min(225, dark_t + 14)) & (~static_imperfection))
             | ((torso_diff >= blemish_diff_t) & (torso_gray <= dark_t))
             | ((torso_absdiff >= max(22, int(diff_t * 1.30))) & (torso_gray <= dark_t) & (~static_imperfection))
+            | ((edge_gain >= edge_seed_t) & (torso_diff >= low_diff_t) & (torso_gray <= min(225, dark_t + 12)) & (~static_imperfection))
         )
         seed_mask = valid_seed_bool.astype(np.uint8) * 255
 
@@ -2188,8 +2310,8 @@ class ParallelYoloOpenCVEngine:
             py2 = min(torso_bottom, int(py + ph + 10))
             if px2 > px1 and py2 > py1:
                 stationary_rescue = (
-                    (torso_diff[py1:py2, px1:px2] >= low_diff_t)
-                    & (torso_gray[py1:py2, px1:px2] <= dark_t)
+                    ((torso_diff[py1:py2, px1:px2] >= low_diff_t) | (edge_gain[py1:py2, px1:px2] >= max(9, int(diff_t * 0.45))))
+                    & (torso_gray[py1:py2, px1:px2] <= min(225, dark_t + 8))
                     & (~static_imperfection[py1:py2, px1:px2])
                 ).astype(np.uint8) * 255
                 seed_mask[py1:py2, px1:px2] = cv2.bitwise_or(
@@ -2197,10 +2319,11 @@ class ParallelYoloOpenCVEngine:
                 )
 
         support_bool = (
-            (torso_gray <= min(228, dark_t + 8))
+            (torso_gray <= min(228, dark_t + 10))
             & (
                 ((torso_diff >= low_diff_t) & (~static_imperfection))
                 | (torso_diff >= blemish_diff_t)
+                | ((edge_gain >= max(10, int(diff_t * 0.50))) & (torso_absdiff >= low_diff_t) & (~static_imperfection))
             )
         )
         support_mask = support_bool.astype(np.uint8) * 255
@@ -2223,7 +2346,7 @@ class ParallelYoloOpenCVEngine:
         best_c = None
         max_a = float("-inf")
         min_corridor_bottom = max(10, int(torso_bottom * 0.32))
-        max_valid_torso_top = max(12, int(fault_y_local) - max(45, int(rh * 0.16)))
+        max_valid_torso_top = max(12, fault_y_scalar - max(45, int(rh * 0.16)))
         min_torso_h = max(24, int(rh * 0.09))
 
         for c in contours:
@@ -6349,7 +6472,11 @@ class PerVideoIDTrackerApp:
         os.makedirs(folder, exist_ok=True)
         try:
             if sys.platform == "win32":
-                os.startfile(folder)
+                startfile_fn = getattr(os, "startfile", None)
+                if callable(startfile_fn):
+                    startfile_fn(folder)
+                else:
+                    subprocess.run(["explorer", folder], check=False)
             elif sys.platform == "darwin":
                 subprocess.run(["open", folder], check=False)
             else:
@@ -6358,7 +6485,22 @@ class PerVideoIDTrackerApp:
             messagebox.showinfo("Folder", folder)
 
     def _set_queue_controls_state(self, state):
-        for btn_attr in ("btn_add", "btn_teams_url", "btn_edit_id", "btn_remove", "btn_clear", "btn_load_prof"):
+        for btn_attr in (
+            "btn_add_vid",
+            "btn_add_url",
+            "btn_edit_id",
+            "btn_remove_vid",
+            "btn_clear_vid",
+            "btn_load_prof_main",
+            "btn_save_prof_main",
+            "btn_train_ai",
+            "btn_change_dir",
+            "btn_add",
+            "btn_teams_url",
+            "btn_remove",
+            "btn_clear",
+            "btn_load_prof",
+        ):
             btn = getattr(self, btn_attr, None)
             if btn is not None:
                 try:
@@ -6467,10 +6609,14 @@ class PerVideoIDTrackerApp:
         rh, rw = base_gray.shape[:2]
 
         if fault_y_local is None:
-            fault_y_local = int(rh * 0.72)
+            fault_y_scalar = int(rh * 0.72)
+        elif isinstance(fault_y_local, np.ndarray):
+            fault_y_scalar = int(np.median(fault_y_local))
+        else:
+            fault_y_scalar = int(fault_y_local)
 
-        top_clear_y = max(5, int(fault_y_local) - 20)
-        bottom_cutoff = min(rh, int(fault_y_local) + 18)
+        top_clear_y = max(5, fault_y_scalar - 20)
+        bottom_cutoff = min(rh, fault_y_scalar + 18)
 
         _, dark_rungs = cv2.threshold(base_gray, ladder_thresh, 255, cv2.THRESH_BINARY_INV)
         blackhat = cv2.morphologyEx(base_gray, cv2.MORPH_BLACKHAT, self.kernel_blackhat_13)
@@ -6516,11 +6662,17 @@ class PerVideoIDTrackerApp:
 
     def _select_mouse_contour(self, candidate_masks, gray, base_gray, previous_bbox, anchor_bbox, fault_y_local=None):
         rh, rw = gray.shape[:2]
+        fault_curve_1d = None
         if fault_y_local is None:
-            fault_y_local = int(rh * 0.72)
-        torso_corridor_y = max(14, int(fault_y_local) - 8)
+            fault_y_scalar = int(rh * 0.72)
+        elif isinstance(fault_y_local, np.ndarray):
+            fault_curve_1d = np.asarray(fault_y_local, dtype=np.float32).reshape(-1)
+            fault_y_scalar = int(np.median(fault_curve_1d)) if fault_curve_1d.size > 0 else int(rh * 0.72)
+        else:
+            fault_y_scalar = int(fault_y_local)
+        torso_corridor_y = max(14, fault_y_scalar - 8)
         min_corridor_bottom = max(10, int(torso_corridor_y * 0.32))
-        max_valid_torso_top = max(12, int(fault_y_local) - max(45, int(rh * 0.16)))
+        max_valid_torso_top = max(12, fault_y_scalar - max(45, int(rh * 0.16)))
         min_torso_h = max(24, int(rh * 0.09))
 
         best_contour = None
@@ -6535,7 +6687,12 @@ class PerVideoIDTrackerApp:
                 if area < 1200 or area > rw * rh * 0.70:
                     continue
                 x, y, width, height = cv2.boundingRect(contour)
-                upper_h = min(y + height, torso_corridor_y) - y
+                if fault_curve_1d is not None and fault_curve_1d.size >= rw:
+                    local_fault_y = float(np.median(fault_curve_1d[max(0, x):min(rw, x + width)]))
+                else:
+                    local_fault_y = float(fault_y_scalar)
+                local_corridor_y = max(14, int(round(local_fault_y)) - 8)
+                upper_h = min(y + height, local_corridor_y) - y
                 aspect_ratio = width / max(1.0, float(height))
                 if (
                     width < 35
@@ -6548,7 +6705,7 @@ class PerVideoIDTrackerApp:
                     or aspect_ratio > 11.5
                 ):
                     continue
-                if (y + height * 0.45) >= fault_y_local:
+                if (y + height * 0.45) >= local_fault_y:
                     continue
                 fill_ratio = area / max(1.0, float(width * height))
                 if fill_ratio < 0.10:
@@ -6568,12 +6725,12 @@ class PerVideoIDTrackerApp:
                     contrast = 0.0
                     darkening = 0.0
                     p85_darkening = 0.0
-                if p85_darkening < 24.0 and previous_bbox is None:
+                if p85_darkening < 24.0 and previous_bbox is None and anchor_bbox is None:
                     continue
                 if (contrast < 10.0 or darkening < 7.0) and anchor_bbox is None and previous_bbox is None:
                     continue
 
-                corridor_align = 1.0 - min(1.0, abs(min(y + height, torso_corridor_y) - torso_corridor_y) / max(18.0, float(torso_corridor_y)))
+                corridor_align = 1.0 - min(1.0, abs(min(y + height, local_corridor_y) - local_corridor_y) / max(18.0, float(local_corridor_y)))
 
                 score = np.log1p(area) + 2.2 * fill_ratio + 0.8 * corridor_align
                 score += float(np.clip(contrast / 26.0, -1.0, 2.5)) + gate_bonus
@@ -6589,6 +6746,7 @@ class PerVideoIDTrackerApp:
                     distance_scale = max(36.0, min(140.0, rw * 0.18))
                     score += 3.2 * np.exp(-distance / distance_scale)
                     score -= min(3.2, distance / distance_scale)
+                    score += 1.2 * self._bbox_iou(candidate_bbox, previous_bbox)
 
                 if score > best_score:
                     best_score = score
@@ -6625,8 +6783,12 @@ class PerVideoIDTrackerApp:
     def _compute_spectral_rung_suppression_mask(crop_bgr, gray_raw, fault_y_local, skin_index=None):
         rh, rw = gray_raw.shape[:2]
         keep_mask = np.full((rh, rw), 255, dtype=np.uint8)
-        y1 = max(8, int(fault_y_local) - 20)
-        y2 = min(rh - 8, int(fault_y_local) + 18)
+        if isinstance(fault_y_local, np.ndarray):
+            fault_y_scalar = int(np.median(fault_y_local))
+        else:
+            fault_y_scalar = int(fault_y_local)
+        y1 = max(8, fault_y_scalar - 20)
+        y2 = min(rh - 8, fault_y_scalar + 18)
         if y2 <= y1:
             return keep_mask
 
@@ -6665,8 +6827,14 @@ class PerVideoIDTrackerApp:
         previous_bbox=None, base_smooth_cached=None, return_skin=False, use_yolo=None,
         gray_raw_cached=None, static_blemish_cached=None
     ):
+        fault_curve_1d = None
         if fault_y_local is None:
-            fault_y_local = int(rh * 0.72)
+            fault_y_scalar = int(rh * 0.72)
+        elif isinstance(fault_y_local, np.ndarray):
+            fault_curve_1d = np.asarray(fault_y_local, dtype=np.float32).reshape(-1)
+            fault_y_scalar = int(np.median(fault_curve_1d)) if fault_curve_1d.size > 0 else int(rh * 0.72)
+        else:
+            fault_y_scalar = int(fault_y_local)
 
         if gray_raw_cached is not None:
             gray_raw = gray_raw_cached
@@ -6682,13 +6850,24 @@ class PerVideoIDTrackerApp:
 
         gray_raw_smooth = cv2.GaussianBlur(gray_raw, (3, 3), 0)
         gray_eff_smooth = cv2.GaussianBlur(gray_eff, (3, 3), 0)
-        base_smooth = base_smooth_cached if base_smooth_cached is not None else cv2.GaussianBlur(base_gray, (3, 3), 0)
+        base_smooth_raw = base_smooth_cached if base_smooth_cached is not None else cv2.GaussianBlur(base_gray, (3, 3), 0)
 
-        if static_blemish_cached is not None and static_blemish_cached.shape == base_smooth.shape:
+        illum_shift = ParallelYoloOpenCVEngine._estimate_illumination_shift(
+            gray_raw_smooth, base_smooth_raw, max(15, fault_y_scalar - 8), previous_bbox=previous_bbox
+        )
+        if abs(illum_shift) >= 1:
+            base_smooth = np.clip(base_smooth_raw.astype(np.int16) + illum_shift, 0, 255).astype(np.uint8)
+        else:
+            base_smooth = base_smooth_raw
+
+        bg_grad = cv2.morphologyEx(base_smooth_raw, cv2.MORPH_GRADIENT, self.kernel_grad_3)
+        fg_grad = cv2.morphologyEx(gray_raw_smooth, cv2.MORPH_GRADIENT, self.kernel_grad_3)
+        edge_gain = cv2.subtract(fg_grad, bg_grad)
+
+        if static_blemish_cached is not None and static_blemish_cached.shape == base_smooth_raw.shape:
             static_blemish = static_blemish_cached
         else:
-            bg_grad = cv2.morphologyEx(base_smooth, cv2.MORPH_GRADIENT, self.kernel_grad_3)
-            static_blemish = (base_smooth <= min(215, dark_t + 8)) | (bg_grad >= 16)
+            static_blemish = (base_smooth_raw <= min(215, dark_t + 8)) | (bg_grad >= 16)
             static_blemish = cv2.dilate(
                 static_blemish.astype(np.uint8) * 255, self.kernel_small, iterations=1
             ) > 0
@@ -6715,9 +6894,9 @@ class PerVideoIDTrackerApp:
         diff_dark = cv2.subtract(base_smooth, gray_raw_smooth)
         diff_abs = cv2.absdiff(base_smooth, gray_raw_smooth)
         if skin_index is not None:
-            diff_eff = np.clip(diff_dark.astype(np.float32) + 0.85 * skin_index, 0, 255).astype(np.uint8)
+            diff_eff = np.clip(diff_dark.astype(np.float32) + 0.85 * skin_index + 0.35 * edge_gain.astype(np.float32), 0, 255).astype(np.uint8)
         else:
-            diff_eff = diff_dark
+            diff_eff = np.clip(diff_dark.astype(np.float32) + 0.35 * edge_gain.astype(np.float32), 0, 255).astype(np.uint8)
 
         strict_diff_t = max(10, int(diff_t * 0.74))
         low_diff_t = max(5, int(diff_t * 0.35))
@@ -6735,7 +6914,16 @@ class PerVideoIDTrackerApp:
         _, body_dark_mask = cv2.threshold(gray_raw_smooth, min(220, dark_t + 12), 255, cv2.THRESH_BINARY_INV)
         raw_mask = cv2.bitwise_or(raw_mask, cv2.bitwise_and(strong_abs_mask, body_dark_mask))
 
-        torso_top_zone = max(10, int(fault_y_local) - 16)
+        # Rescue pink paws / snout tips with high biological skin chromaticity
+        if skin_index is not None:
+            pink_extremity_mask = (
+                (skin_index >= 11.0)
+                & (diff_eff >= max(6, int(diff_t * 0.42)))
+                & ((~static_blemish) | (skin_index >= 14.5))
+            ).astype(np.uint8) * 255
+            raw_mask = cv2.bitwise_or(raw_mask, pink_extremity_mask)
+
+        torso_top_zone = max(10, fault_y_scalar - 16)
         seed_upper = raw_mask[:torso_top_zone, :].copy()
         if previous_bbox is not None:
             px, py, pw, ph = previous_bbox
@@ -6743,16 +6931,19 @@ class PerVideoIDTrackerApp:
             py1, py2 = max(0, int(py - 8)), min(torso_top_zone, int(py + ph + 8))
             if px2 > px1 and py2 > py1:
                 stat_seed = (
-                    (diff_dark[py1:py2, px1:px2] >= low_diff_t)
-                    & (gray_raw_smooth[py1:py2, px1:px2] <= dark_t)
+                    ((diff_dark[py1:py2, px1:px2] >= low_diff_t) | (edge_gain[py1:py2, px1:px2] >= 12))
+                    & (gray_eff_smooth[py1:py2, px1:px2] <= min(225, dark_t + 6))
                     & (~static_blemish[py1:py2, px1:px2])
                 ).astype(np.uint8) * 255
                 seed_upper[py1:py2, px1:px2] = cv2.bitwise_or(seed_upper[py1:py2, px1:px2], stat_seed)
 
         support_upper = (
-            (gray_raw_smooth[:torso_top_zone, :] <= dark_t)
+            (gray_eff_smooth[:torso_top_zone, :] <= min(225, dark_t + 4))
             & (
-                ((diff_dark[:torso_top_zone, :] >= low_diff_t) & (~static_blemish[:torso_top_zone, :]))
+                (
+                    ((diff_dark[:torso_top_zone, :] >= low_diff_t) | (edge_gain[:torso_top_zone, :] >= 14))
+                    & (~static_blemish[:torso_top_zone, :])
+                )
                 | (diff_dark[:torso_top_zone, :] >= blemish_diff_t)
             )
         ).astype(np.uint8) * 255
@@ -6762,12 +6953,12 @@ class PerVideoIDTrackerApp:
         reconstructed_torso = cv2.bitwise_and(support_upper, seed_upper_dilated)
         raw_mask[:torso_top_zone, :] = cv2.bitwise_or(raw_mask[:torso_top_zone, :], reconstructed_torso)
 
-        max_reach_y = min(rh, int(fault_y_local) + max(38, int(rh * 0.24)))
+        max_reach_y = min(rh, fault_y_scalar + max(38, int(rh * 0.24)))
         if max_reach_y < rh:
             raw_mask[max_reach_y:, :] = 0
 
         spectral_rung_keep = self._compute_spectral_rung_suppression_mask(
-            crop, gray_raw_smooth, fault_y_local, skin_index=skin_index
+            crop, gray_raw_smooth, fault_y_scalar, skin_index=skin_index
         )
         effective_inv_ladder = cv2.bitwise_and(inv_ladder_mask, spectral_rung_keep)
         fg_occludes_rung = (diff_dark >= max(26, int(diff_t * 1.15))) & (gray_raw_smooth <= min(78, dark_t - 28))
@@ -6795,9 +6986,15 @@ class PerVideoIDTrackerApp:
         if best_contour is None:
             ai_pose = None
             if stream_id is not None:
-                ai_pose = self.hybrid_locator.get_latest_pose_for_bbox(0, 0, rw, rh, rw, rh, stream_id=stream_id)
-            if ai_pose is None:
+                ai_pose = self.hybrid_locator.get_latest_pose_for_bbox(
+                    0, 0, rw, rh, rw, rh, stream_id=stream_id, frame_idx=frame_idx, max_age=ai_max_age
+                )
+            else:
                 ai_pose = getattr(self.hybrid_locator._tls, "last_pose", None) or getattr(self.hybrid_locator, "last_sync_pose", None)
+                if ai_pose is not None and frame_idx is not None and ai_max_age is not None:
+                    pose_fidx = ai_pose.get("frame_idx")
+                    if pose_fidx is not None and abs(int(frame_idx) - int(pose_fidx)) > int(ai_max_age):
+                        ai_pose = None
             if use_yolo and getattr(self.hybrid_locator, "is_rodent_pose", False) and ai_pose and "bbox" in ai_pose:
                 ai_mask = self.hybrid_locator._build_capsule_mask_from_pose(ai_pose, ai_pose["bbox"], rw, rh)
                 ai_cnts, _ = cv2.findContours(ai_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -6817,7 +7014,7 @@ class PerVideoIDTrackerApp:
         x_c, y_c, w_c, h_c = cv2.boundingRect(best_contour)
         cv2.drawContours(final_mouse_mask, [best_contour], -1, 255, -1)
 
-        col_heights = np.sum(final_mouse_mask[:max(12, int(fault_y_local) - 6), x_c:x_c + w_c] > 0, axis=0)
+        col_heights = np.sum(final_mouse_mask[:max(12, fault_y_scalar - 6), x_c:x_c + w_c] > 0, axis=0)
         thick_cols = np.where(col_heights >= max(6, int(h_c * 0.25)))[0]
         if len(thick_cols) >= 10:
             torso_x1 = x_c + int(thick_cols[0])
@@ -6832,12 +7029,16 @@ class PerVideoIDTrackerApp:
         for c in contours:
             if cv2.boundingRect(c) != (x_c, y_c, w_c, h_c):
                 c_area = cv2.contourArea(c)
-                if 10 <= c_area < 2200:
+                if 6 <= c_area < 2200:
                     cx, cy, cw, ch = cv2.boundingRect(c)
                     center_x = cx + cw / 2.0
                     body_x_min = torso_x1 - max(6, int(torso_w * 0.05))
                     body_x_max = torso_x2 + max(8, int(torso_w * 0.08))
-                    max_paw_y = min(max_reach_y, max(y_c + h_c + 34, int(fault_y_local) + int(rh * 0.26)))
+                    if fault_curve_1d is not None and fault_curve_1d.size >= rw:
+                        local_fault_c = int(round(float(np.median(fault_curve_1d[max(0, cx):min(rw, cx + cw)]))))
+                    else:
+                        local_fault_c = fault_y_scalar
+                    max_paw_y = min(max_reach_y, max(y_c + h_c + 34, local_fault_c + int(rh * 0.26)))
 
                     if (
                         (cy + ch) <= torso_top_zone
@@ -6850,21 +7051,51 @@ class PerVideoIDTrackerApp:
                         max_x, max_y = max(max_x, cx + cw), max(max_y, cy + ch)
                         continue
 
-                    if cw > ch * 1.9 or ch < 4:
+                    has_pink_paw = False
+                    if skin_index is not None:
+                        sub_skin = skin_index[cy:cy + ch, cx:cx + cw]
+                        if sub_skin.size > 0 and float(np.percentile(sub_skin, 85)) >= 9.0:
+                            has_pink_paw = True
+                    if c_area < 10 and not has_pink_paw:
+                        continue
+                    if cw > ch * (2.2 if has_pink_paw else 1.9) or ch < (3 if has_pink_paw else 4):
                         continue
                     if body_x_min <= center_x <= body_x_max and y_c <= cy <= max_paw_y:
                         cv2.drawContours(final_mouse_mask, [c], -1, 255, -1)
+                        # Bridge narrow vertical rung gaps (<= 14 px) between the torso above and a paw below a rung
+                        bx0 = max(0, cx)
+                        bx1 = min(rw, cx + cw)
+                        if bx1 > bx0 and cy > y_c:
+                            torso_slice = final_mouse_mask[:cy, bx0:bx1]
+                            ty_s, _ = np.where(torso_slice > 0)
+                            if len(ty_s) > 0:
+                                torso_bottom_y = int(np.max(ty_s))
+                                gap_h = cy - torso_bottom_y
+                                if 1 <= gap_h <= 14:
+                                    bridge_x0 = max(bx0, int(round(center_x)) - max(1, cw // 3))
+                                    bridge_x1 = min(bx1, int(round(center_x)) + max(2, cw // 3 + 1))
+                                    final_mouse_mask[torso_bottom_y:cy + 1, bridge_x0:bridge_x1] = 255
                         min_x = min(min_x, cx)
                         min_y = min(min_y, cy)
                         max_x = max(max_x, cx + cw)
                         max_y = max(max_y, cy + ch)
 
-        upper_cut = max(10, int(fault_y_local) - 16)
+        upper_cut = max(10, fault_y_scalar - 16)
         final_mouse_mask[:upper_cut, :] = cv2.morphologyEx(
             final_mouse_mask[:upper_cut, :], cv2.MORPH_CLOSE, self.kernel_upper_bridge
         )
+        # Fill internal hollow cavities inside the upper torso silhouette (e.g. from specular fur highlights)
+        upper_cnts, _ = cv2.findContours(
+            final_mouse_mask[:upper_cut, :], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        for u_c in upper_cnts:
+            if cv2.contourArea(u_c) >= 180:
+                cv2.drawContours(final_mouse_mask[:upper_cut, :], [u_c], -1, 255, -1)
+        final_mouse_mask[:upper_cut, :] = cv2.bitwise_and(
+            final_mouse_mask[:upper_cut, :], dynamic_inv_ladder[:upper_cut, :]
+        )
         final_mouse_mask[upper_cut:, :] = cv2.bitwise_and(
-            final_mouse_mask[upper_cut:, :], inv_ladder_mask[upper_cut:, :]
+            final_mouse_mask[upper_cut:, :], dynamic_inv_ladder[upper_cut:, :]
         )
 
         ys, xs = np.where(final_mouse_mask > 0)
@@ -6886,7 +7117,12 @@ class PerVideoIDTrackerApp:
         sub_inv_lad = inv_ladder_mask[:, x1_loc:x2_loc]
 
         gray = cv2.cvtColor(sub_crop, cv2.COLOR_BGR2GRAY) if sub_crop.ndim == 3 else sub_crop
-        diff = cv2.subtract(sub_base, gray)
+        illum_shift = ParallelYoloOpenCVEngine._estimate_illumination_shift(gray, sub_base)
+        if abs(illum_shift) >= 1:
+            sub_base_adj = np.clip(sub_base.astype(np.int16) + illum_shift, 0, 255).astype(np.uint8)
+        else:
+            sub_base_adj = sub_base
+        diff = cv2.subtract(sub_base_adj, gray)
         _, diff_mask = cv2.threshold(diff, max(10, int(diff_t * 0.68)), 255, cv2.THRESH_BINARY)
         _, dark_mask = cv2.threshold(gray, min(220, dark_t + 12), 255, cv2.THRESH_BINARY_INV)
         diff_mask = cv2.bitwise_and(diff_mask, dark_mask)
@@ -6895,7 +7131,8 @@ class PerVideoIDTrackerApp:
 
 
     def _extract_rodent_anatomy(
-        self, mouse_mask, fault_curve, bbox, previous_bbox=None, move_dir=1.0, crop=None, skin_map=None, stream_id=None
+        self, mouse_mask, fault_curve, bbox, previous_bbox=None, move_dir=1.0, crop=None,
+        skin_map=None, stream_id=None, frame_idx=None, ai_max_age=None
     ):
         mh, mw = mouse_mask.shape[:2]
         if bbox is None:
@@ -7134,15 +7371,23 @@ class PerVideoIDTrackerApp:
                 return (parent_joint[0], min(mh - 1, parent_joint[1] + 8))
             p92_y = float(np.percentile(ly, 92))
             bottom_band = ly >= max(0, int(p92_y) - 2)
-            paw_x = px1 + int(round(np.mean(lx[bottom_band])))
-            paw_y = py1 + int(round(np.max(ly[bottom_band])))
+            bx_band = lx[bottom_band]
+            by_band = ly[bottom_band]
+            if skin_map is not None and skin_map.shape[:2] == (mh, mw):
+                skin_weights = np.maximum(0.5, skin_map[py1 + by_band, px1 + bx_band].astype(np.float32))
+                paw_x = px1 + int(round(float(np.sum(bx_band * skin_weights) / np.sum(skin_weights))))
+            else:
+                paw_x = px1 + int(round(np.mean(bx_band)))
+            paw_y = py1 + int(round(np.max(by_band)))
             return (int(np.clip(paw_x, 0, mw - 1)), int(np.clip(paw_y, 0, mh - 1)))
 
         hind_paw_pt = sample_ventral_paw(0.08, 0.44, hip_pt)
         fore_paw_pt = sample_ventral_paw(0.46, 0.74, shoulder_pt)
 
         if hasattr(self, "hybrid_locator") and getattr(self.hybrid_locator, "is_rodent_pose", False):
-            ai_pose = self.hybrid_locator.get_latest_pose_for_bbox(bx, by, bw, bh, mw, mh, stream_id=stream_id)
+            ai_pose = self.hybrid_locator.get_latest_pose_for_bbox(
+                bx, by, bw, bh, mw, mh, stream_id=stream_id, frame_idx=frame_idx, max_age=ai_max_age
+            )
             if ai_pose is not None:
                 ai_nose = ai_pose.get("nose_pt")
                 ai_tbase = ai_pose.get("tail_base")
@@ -7353,7 +7598,7 @@ class PerVideoIDTrackerApp:
         self, final_mouse_mask, fault_y_or_curve, crop=None, bbox=None,
         previous_bbox=None, inv_ladder_mask=None, move_dir=1.0, return_meta=False,
         skin_map=None, valid_x_bounds=None, base_gray=None,
-        gray=None, gray_eff=None, stream_id=None
+        gray=None, gray_eff=None, stream_id=None, frame_idx=None, ai_max_age=None
     ):
         mh, mw = final_mouse_mask.shape[:2]
         if isinstance(fault_y_or_curve, np.ndarray) and fault_y_or_curve.ndim == 1:
@@ -7366,7 +7611,8 @@ class PerVideoIDTrackerApp:
 
         anatomy = self._extract_rodent_anatomy(
             final_mouse_mask, fault_curve, bbox, previous_bbox=previous_bbox,
-            move_dir=move_dir, crop=crop, skin_map=skin_map, stream_id=stream_id
+            move_dir=move_dir, crop=crop, skin_map=skin_map, stream_id=stream_id,
+            frame_idx=frame_idx, ai_max_age=ai_max_age
         )
         row_grid = np.arange(mh, dtype=np.int32)[:, None]
         below_fault = (row_grid >= fault_curve[None, :mw]).astype(np.uint8) * 255
@@ -7450,15 +7696,16 @@ class PerVideoIDTrackerApp:
 
             if crop_g is not None:
                 sub_mask_sc = below_zone[sy:min(mh, sy + sh), sx:min(mw, sx + sw)] > 0
-                patch_g = crop_g[sy:min(mh, sy + sh), sx:min(mw, sx + sw)]
+                ref_g_img = gray_eff if gray_eff is not None else crop_g
+                patch_g = ref_g_img[sy:min(mh, sy + sh), sx:min(mw, sx + sw)]
                 pix_g = patch_g[sub_mask_sc] if np.any(sub_mask_sc) else patch_g.reshape(-1)
-                if pix_g.size > 0:
+                if pix_g.size > 0 and skin_score < 12.0:
                     p10_g = float(np.percentile(pix_g, 10))
                     p50_g = float(np.percentile(pix_g, 50))
                     if depth_val <= 14 and (p10_g > 78.0 or p50_g > 120.0):
                         continue
 
-                if base_gray is not None and depth_val <= 16:
+                if base_gray is not None and depth_val <= 16 and skin_score < 12.5:
                     py1, py2 = max(8, sy - 2), min(mh - 8, sy + sh + 2)
                     px1, px2 = max(0, sx - 3), min(mw, sx + sw + 3)
                     if (py2 - py1) >= 4 and (px2 - px1) >= 4:
@@ -7483,7 +7730,7 @@ class PerVideoIDTrackerApp:
                     row_min_g = np.min(cross_band, axis=1)
                     neck_max_g = int(np.max(row_min_g))
                     if neck_max_g > 175:
-                        if skin_score < 14.0 or float(np.percentile(row_min_g, 75)) > 170.0:
+                        if skin_score < 14.0 or float(np.percentile(row_min_g, 55)) > 170.0:
                             continue
 
             top_pts_x = xs[ys <= (np.min(ys) + max(2, int(sh * 0.35)))]
@@ -8012,6 +8259,7 @@ class PerVideoIDTrackerApp:
             "dlc_export_train": bool(self.var_dlc_export_train.get()),
             "enable_review": bool(self.var_enable_review.get()),
             "lock_lr_active": bool(self.var_lock_lr_direction.get()) and not bool(self.var_bidirectional.get()),
+            "use_comma": bool(self.var_decimal.get().startswith(",")),
         }
 
         threading.Thread(
@@ -8278,19 +8526,35 @@ class PerVideoIDTrackerApp:
                         active_base_smooth = base_smooth_static
                         active_fault_scalar = fault_y_local
 
-                    # Stationary rescue bbox (only during active run)
+                    # Stationary & Kalman-velocity-predicted rescue bbox (only during active run)
                     previous_bbox_local = last_bbox_local if state.startswith("RUNNING_") else None
+                    if (
+                        previous_bbox_local is not None
+                        and kalman is not None
+                        and kalman.initialized
+                        and state.startswith("RUNNING_")
+                    ):
+                        pred_pos = kalman.predict_next(dt_frames=frame_stride * max(1, bbox_miss_count + 1))
+                        if pred_pos is not None:
+                            lbx, lby, lbw, lbh = previous_bbox_local
+                            pred_loc_cx = pred_pos[0] - v_rx
+                            cur_loc_cx = lbx + lbw // 2
+                            shift_x = int(np.clip(pred_loc_cx - cur_loc_cx, -45, 45))
+                            new_bx = int(np.clip(lbx + shift_x, 0, max(0, v_rw - lbw)))
+                            previous_bbox_local = (new_bx, lby, lbw, lbh)
                     active_static_blemish = static_blemish_base if active_base_gray is base_gray else None
 
+                    ai_max_age_frames = max(12, frame_stride * 12)
                     mouse_detected, final_mouse_mask, bbox, skin_idx_map = self._detect_mouse_on_crop(
                         crop, active_base_gray, active_inv_ladder, v_rw, v_rh, dark_t, diff_t,
-                        fault_y_local=active_fault_scalar, stream_id=uid, frame_idx=frame_idx,
-                        ai_max_age=max(12, frame_stride * 12), previous_bbox=previous_bbox_local,
+                        fault_y_local=active_fault_target, stream_id=uid, frame_idx=frame_idx,
+                        ai_max_age=ai_max_age_frames, previous_bbox=previous_bbox_local,
                         base_smooth_cached=active_base_smooth, return_skin=True, use_yolo=use_yolo_fusion,
                         gray_raw_cached=crop_gray, static_blemish_cached=active_static_blemish
                     )
 
                     mask_area = cv2.countNonZero(final_mouse_mask) if (mouse_detected and final_mouse_mask is not None) else 0
+                    eff_kalman_dt = frame_stride * max(1, bbox_miss_count + 1)
 
                     if mouse_detected and mask_area >= 1200:
                         last_bbox_local = bbox
@@ -8325,7 +8589,7 @@ class PerVideoIDTrackerApp:
                             raw_gy = v_ry + y_c + (h_c // 2)
 
                         if kalman is not None and state.startswith("RUNNING_"):
-                            mouse_x_global, mouse_y_center_global = kalman.update(raw_gx, raw_gy)
+                            mouse_x_global, mouse_y_center_global = kalman.update(raw_gx, raw_gy, dt_frames=eff_kalman_dt)
                         else:
                             mouse_x_global, mouse_y_center_global = raw_gx, raw_gy
                         mouse_y_top_global = v_ry + y_c
@@ -8401,7 +8665,8 @@ class PerVideoIDTrackerApp:
                                 previous_bbox=previous_bbox_local, inv_ladder_mask=active_inv_ladder,
                                 move_dir=run_direction, return_meta=True, skin_map=skin_idx_map,
                                 valid_x_bounds=valid_ladder_bounds, base_gray=active_base_gray,
-                                gray=crop_gray, gray_eff=gray_eff_track, stream_id=uid
+                                gray=crop_gray, gray_eff=gray_eff_track, stream_id=uid,
+                                frame_idx=frame_idx, ai_max_age=ai_max_age_frames
                             )
 
                             if is_dip:
@@ -8581,13 +8846,14 @@ class PerVideoIDTrackerApp:
                                     if len(vel_arr) >= 6:
                                         accels = []
                                         for k in range(1, len(vel_arr)):
-                                            dt_a = step_dts[k]
+                                            dt_a = 0.5 * (step_dts[k - 1] + step_dts[k])
                                             if dt_a > 1e-4:
                                                 accels.append(((vel_arr[k] - vel_arr[k - 1]) / dt_a, dt_a))
                                         jerks = []
                                         for k in range(1, len(accels)):
-                                            accel_curr, dt_j = accels[k]
-                                            accel_prev, _ = accels[k - 1]
+                                            accel_curr, dt_curr = accels[k]
+                                            accel_prev, dt_prev = accels[k - 1]
+                                            dt_j = 0.5 * (dt_curr + dt_prev)
                                             if dt_j > 1e-4:
                                                 jerks.append(abs(accel_curr - accel_prev) / dt_j)
                                         ref_jerk = max(100.0, float(np.mean(vel_arr) * 80.0))
@@ -9423,6 +9689,13 @@ class PerVideoIDTrackerApp:
         if not self.pending_results:
             self.reset_ui()
             return
+        if threading.current_thread() is threading.main_thread():
+            try:
+                if not hasattr(self, "_run_flags") or not isinstance(self._run_flags, dict):
+                    self._run_flags = {}
+                self._run_flags["use_comma"] = bool(self.var_decimal.get().startswith(","))
+            except (AttributeError, RuntimeError, tk.TclError):
+                pass
         self.log("\n💾 [Export] Finalizing kinematic metrics, velocity heatmaps & CSV tables in background...")
         threading.Thread(target=self._export_worker, daemon=True).start()
 
@@ -9443,9 +9716,15 @@ class PerVideoIDTrackerApp:
     def _fmt_num(self, val, fmt_str="{:.2f}", use_comma=None):
         s = fmt_str.format(val)
         if use_comma is None:
-            try:
-                use_comma = self.var_decimal.get().startswith(",")
-            except (RuntimeError, tk.TclError):
+            run_flags = getattr(self, "_run_flags", None)
+            if isinstance(run_flags, dict) and "use_comma" in run_flags:
+                use_comma = bool(run_flags["use_comma"])
+            elif threading.current_thread() is threading.main_thread():
+                try:
+                    use_comma = self.var_decimal.get().startswith(",")
+                except (AttributeError, RuntimeError, tk.TclError):
+                    use_comma = True
+            else:
                 use_comma = True
         if use_comma:
             return s.replace(".", ",")
