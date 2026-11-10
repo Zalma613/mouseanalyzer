@@ -86,7 +86,18 @@ ruff check --select E9,F,B MouseTracker.py tests/test_mousetracker.py
 
 ---
 
-## 📦 Release Notes (`v1.4.8`)
+## 📦 Release Notes (`v1.4.9`)
+
+* **Per-Video Interactive Calibration (`var_per_video_calib`):**
+  * Added an optional **"Ask for per-video calibration settings (gates, ROI, thresholds)"** (`chk_per_video_calib`) setting in the main control dock and Advanced Settings dialog (persisted in JSON calibration profiles).
+  * When enabled, clicking **Start Calibration & Analysis** opens the interactive visual preview sequentially for each queued video (`1/N`, `2/N`, $\dots$) to configure Start/Goal gate positions (`Left-Click`), custom ladder ROI box (`Shift + Left-Drag`), and brightness/motion/ladder/fault-line thresholds before launching parallel batch analysis.
+  * Added the **`[A]` ("Apply to All")** shortcut in the multi-video calibration preview to apply the current video's settings to all remaining videos in the queue, and updated `execute_parallel_processing` so each worker thread applies its video's `custom_calib` geometry and `px_per_cm` scaling.
+* **Trained AI Model Loading & Paw-Slip Reinforcement:**
+  * Updated `ParallelYoloOpenCVEngine._init_yolo`, `_run_yolo_training_pipeline`, and `_test_current_model` to prioritize user-trained `.pt` weights in `SAFE_BASE_DIR` (or whichever file has the newer modification timestamp) over read-only bundled PyInstaller assets.
+  * Reinforced `_extract_rodent_anatomy` (`_blend_paw`) and `_anatomical_dip_mask` so high-confidence AI-predicted `fore_paw_pt` and `hind_paw_pt` keypoints dipping below the fault curve are projected into `paw_zone` even when the raw brightness/motion mask is faint.
+  * Expanded automated test coverage to 38 tests (`test_per_video_calibration_workflow_and_custom_calib_application` and `test_trained_ai_weights_priority_and_analysis_usage`).
+
+### Previous Release (`v1.4.8`)
 
 * **Windows `.exe` Compatibility & High-DPI Hardening:**
   * Added native Windows Per-Monitor High-DPI awareness (`shcore.SetProcessDpiAwareness` with `user32.SetProcessDPIAware` fallback) in `configure_native_os_identity`.

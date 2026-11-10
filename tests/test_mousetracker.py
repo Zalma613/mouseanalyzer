@@ -608,6 +608,84 @@ class TestUltralyticsOfflineAndTrainerHardening(unittest.TestCase):
                 self.assertEqual(len(created_dirs), 1)
                 self.assertFalse(os.path.exists(created_dirs[0]))
 
+    def test_trained_ai_weights_priority_and_analysis_usage(self):
+        """Verifies that _init_yolo prefers user-trained weights in SAFE_BASE_DIR over older bundled assets,
+        and that trained AI pose keypoints directly drive limb slip detection even when OpenCV mask is faint."""
+        with tempfile.TemporaryDirectory() as tmp_safe, \
+             tempfile.TemporaryDirectory() as tmp_bundled:
+            bundled_pt = os.path.join(tmp_bundled, "mouse_pose_ai.pt")
+            trained_pt = os.path.join(tmp_safe, "mouse_pose_ai.pt")
+            with open(bundled_pt, "wb") as f:
+                f.write(b"OLD_BUNDLED_PT")
+            with open(trained_pt, "wb") as f:
+                f.write(b"NEW_USER_TRAINED_PT")
+            # Ensure user-trained file has a newer mtime than bundled asset
+            os.utime(bundled_pt, (1700000000, 1700000000))
+            os.utime(trained_pt, (1800000000, 1800000000))
+
+            loaded_paths = []
+
+            class _FakeYOLO:
+                task = "pose"
+                names = {0: "rodent"}
+                def __init__(self, path):
+                    loaded_paths.append(os.path.abspath(path))
+                def predict(self, *args, **kwargs):
+                    return []
+
+            with unittest.mock.patch.object(mt, "SAFE_BASE_DIR", tmp_safe), \
+                 unittest.mock.patch.object(mt, "get_resource_path", return_value=bundled_pt), \
+                 unittest.mock.patch("ultralytics.YOLO", _FakeYOLO):
+                engine = mt.ParallelYoloOpenCVEngine(lambda _: None)
+                self.assertEqual(engine.model_path, os.path.abspath(trained_pt))
+                self.assertEqual(loaded_paths[-1], os.path.abspath(trained_pt))
+                self.assertTrue(engine.is_rodent_pose)
+
+            # Now verify that during analysis, a trained AI paw keypoint below the fault line
+            # is blended with high weight (0.92) and reinforces the dip mask to trigger a PAW slip
+            app = TestReviewAndRefactoringImprovements._make_headless_detector()
+            app.hybrid_locator.is_rodent_pose = True
+            rh, rw = 160, 260
+            fault_y = 112
+            fault_curve = np.full(rw, fault_y, dtype=np.int32)
+
+            # OpenCV mask only has the upper torso above the fault line (paw below rung was missed by raw threshold)
+            mouse_mask = np.zeros((rh, rw), dtype=np.uint8)
+            mt.cv2.ellipse(mouse_mask, (130, 74), (44, 22), 0, 0, 360, 255, -1)
+            bbox = (86, 52, 88, 44)
+
+            # Plant a fresh trained-AI pose prediction on stream "vid_ai" at frame 15 with fore_paw_pt dipping to y=132
+            ai_pose = {
+                "bbox": bbox,
+                "nose_pt": (170, 72), "nose_pt_conf": 0.90,
+                "head_pt": (158, 66), "head_pt_conf": 0.88,
+                "shoulder_pt": (144, 68), "shoulder_pt_conf": 0.85,
+                "fore_paw_pt": (146, 132), "fore_paw_pt_conf": 0.86,
+                "spine_mid": (126, 65), "spine_mid_conf": 0.85,
+                "hip_pt": (106, 68), "hip_pt_conf": 0.85,
+                "hind_paw_pt": (104, 96), "hind_paw_pt_conf": 0.82,
+                "tail_base": (90, 72), "tail_base_conf": 0.80,
+                "tail_tip": (60, 74), "tail_tip_conf": 0.75,
+            }
+            app.hybrid_locator._set_thread_pose("vid_ai", ai_pose, frame_idx=15)
+
+            anat = app._extract_rodent_anatomy(
+                mouse_mask, fault_curve, bbox, move_dir=1.0, stream_id="vid_ai", frame_idx=15, ai_max_age=5
+            )
+            self.assertIsNotNone(anat)
+            # Because AI fore_paw_pt=(146, 132) is below fault_y=112 with conf=0.86, _blend_paw weights AI at 0.92
+            self.assertGreater(anat["fore_paw_pt"][1], fault_y + 12)
+
+            # And _anatomical_dip_mask reinforces paw_zone with the AI limb so _check_real_dip_below_line detects it
+            is_dip, dip_x, dip_y, _, dip_depth, dip_meta = app._check_real_dip_below_line(
+                mouse_mask, fault_curve, crop=np.full((rh, rw, 3), 40, dtype=np.uint8),
+                bbox=bbox, move_dir=1.0, return_meta=True, stream_id="vid_ai", frame_idx=15, ai_max_age=5
+            )
+            self.assertTrue(is_dip)
+            self.assertEqual(dip_meta["dlc_code"], "PAW")
+            self.assertEqual(dip_meta["dlc_subcode"], "FOREPAW")
+            self.assertGreater(dip_y, fault_y)
+
 
 class TestReviewAndRefactoringImprovements(unittest.TestCase):
     def test_roi_config_dataclass_and_legacy_sequence_compatibility(self):
@@ -1139,6 +1217,141 @@ class TestWindowsPlatformCompatibility(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(subj_dir, "egyed_Mouse_Sim_01_meresi_adatok.csv")))
             self.assertTrue(os.path.exists(os.path.join(subj_dir, "egyed_Mouse_Sim_01_futas_1_heatmap.jpg")))
             self.assertTrue(os.path.exists(os.path.join(subj_dir, "egyed_Mouse_Sim_01_futas_1_lenyulas_1.jpg")))
+
+    def test_per_video_calibration_workflow_and_custom_calib_application(self):
+        """Verifies that var_per_video_calib prompts for each video (or applies to remaining) and process_single_video uses each video's custom_calib."""
+        with tempfile.TemporaryDirectory(prefix="PerVidCalib_") as tmpdir:
+            v1_path = os.path.join(tmpdir, "Vid_1.mp4")
+            v2_path = os.path.join(tmpdir, "Vid_2.mp4")
+            v3_path = os.path.join(tmpdir, "Vid_3.mp4")
+            output_dir = os.path.join(tmpdir, "Out")
+            os.makedirs(output_dir, exist_ok=True)
+
+            width, height, fps = 640, 240, 30
+            fourcc = mt.cv2.VideoWriter_fourcc(*"mp4v")
+            for vp in (v1_path, v2_path, v3_path):
+                writer = mt.cv2.VideoWriter(vp, fourcc, fps, (width, height))
+                frm = np.full((height, width, 3), 220, dtype=np.uint8)
+                for _ in range(15):
+                    writer.write(frm)
+                writer.release()
+
+            app = mt.PerVideoIDTrackerApp.__new__(mt.PerVideoIDTrackerApp)
+            app.lang = "en"
+            app.output_base_dir = output_dir
+            app.is_running = True
+            app.pending_results = []
+            app.gpu_available = False
+            app.gpu_device_name = "CPU"
+            app.calib_dark_thresh = 135
+            app.calib_diff_thresh = 24
+            app.calib_ladder_thresh = 132
+            app.calib_fault_Ratio = 72
+            app.saved_geometry = None
+            app.var_per_video_calib = unittest.mock.MagicMock(get=lambda: True)
+            app.var_auto_calib = unittest.mock.MagicMock(get=lambda: False)
+            app.var_use_gpu = unittest.mock.MagicMock(get=lambda: False)
+            app.var_yolo_fusion = unittest.mock.MagicMock(get=lambda: False)
+            app.var_bidirectional = unittest.mock.MagicMock(get=lambda: False)
+            app.var_lock_lr_direction = unittest.mock.MagicMock(get=lambda: True)
+            app.var_protocol_runs = unittest.mock.MagicMock(get=lambda: "1")
+            app.var_enable_review = unittest.mock.MagicMock(get=lambda: False)
+            app.var_enable_zones = unittest.mock.MagicMock(get=lambda: True)
+            app.var_enable_kinematics = unittest.mock.MagicMock(get=lambda: True)
+            app.var_use_kalman = unittest.mock.MagicMock(get=lambda: True)
+            app.var_dlc_superanimal = unittest.mock.MagicMock(get=lambda: False)
+            app.var_dlc_export_train = unittest.mock.MagicMock(get=lambda: False)
+            app.var_threads = unittest.mock.MagicMock(get=lambda: "1")
+            app.var_stride = unittest.mock.MagicMock(get=lambda: "1")
+            app.var_cooldown = unittest.mock.MagicMock(get=lambda: "0.50")
+            app.var_min_dist = unittest.mock.MagicMock(get=lambda: "30")
+            app.var_gate_cm = unittest.mock.MagicMock(get=lambda: "60.0")
+            app.var_decimal = unittest.mock.MagicMock(get=lambda: ". (OriginPro)")
+
+            app.kernel_small = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (3, 3))
+            app.kernel_horiz = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (11, 3))
+            app.kernel_upper_bridge = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (15, 7))
+            app.kernel_fill = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (7, 7))
+            app.kernel_rung_close = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (7, 7))
+            app.kernel_sag_guard = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (7, 13))
+            app.kernel_blackhat_13 = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (13, 13))
+            app.kernel_torso_open = mt.cv2.getStructuringElement(mt.cv2.MORPH_ELLIPSE, (9, 7))
+            app.kernel_grad_3 = mt.cv2.getStructuringElement(mt.cv2.MORPH_RECT, (3, 3))
+            app.log = lambda _msg: None
+            app.update_row_status = lambda _uid, _st: None
+            app.increment_progress = lambda _tot: None
+            app.reset_ui = lambda: None
+            app._refresh_kpi_cards = lambda: None
+            app._build_profile_dict = lambda: {"per_video_calib": True}
+            app.root = unittest.mock.MagicMock()
+
+            with unittest.mock.patch.object(mt.ParallelYoloOpenCVEngine, "_init_yolo", return_value=None):
+                app.hybrid_locator = mt.ParallelYoloOpenCVEngine(app.log)
+            app.auto_engine = mt.AutoAdaptiveLadderEngine(app.log)
+            app.dlc_addon = mt.DLCAddonManager(app.log)
+            app.dlc_addon.dlc_available = False
+
+            app.video_data = [
+                {"uid": "u1", "name": "Vid_1.mp4", "id": "101", "path": v1_path},
+                {"uid": "u2", "name": "Vid_2.mp4", "id": "102", "path": v2_path},
+                {"uid": "u3", "name": "Vid_3.mp4", "id": "103", "path": v3_path},
+            ]
+
+            calib_calls = []
+
+            def _fake_interactive_calibrate(video_item, idx, total_cal, prev_calib=None):
+                calib_calls.append((video_item["uid"], idx, total_cal))
+                if idx == 1:
+                    return ({
+                        "rx": 30, "ry": 40, "rw": 550, "rh": 150,
+                        "left_gate_x": 85, "right_gate_x": 515,
+                        "dark_t": 140, "diff_t": 22, "ladder_t": 125, "fault_pct": 68,
+                        "base_gray": np.full((150, 550), 220, dtype=np.uint8),
+                    }, False)
+                # On video 2, user adjusts gates and presses 'A' (apply_to_remaining=True)
+                return ({
+                    "rx": 45, "ry": 50, "rw": 520, "rh": 140,
+                    "left_gate_x": 110, "right_gate_x": 490,
+                    "dark_t": 150, "diff_t": 28, "ladder_t": 135, "fault_pct": 74,
+                    "base_gray": np.full((140, 520), 220, dtype=np.uint8),
+                }, True)
+
+            with unittest.mock.patch.object(app, "_interactive_calibrate_video", side_effect=_fake_interactive_calibrate), \
+                 unittest.mock.patch.object(app, "_launch_processing_thread") as mock_launch:
+                app.setup_and_run_parallel()
+                # Only called for u1 and u2 because u2 returned apply_to_remaining=True
+                self.assertEqual(calib_calls, [("u1", 1, 3), ("u2", 2, 3)])
+                mock_launch.assert_called_once_with(30, 40, 550, 150, 85, 515)
+
+            self.assertEqual(app.video_data[0]["custom_calib"]["left_gate_x"], 85)
+            self.assertEqual(app.video_data[1]["custom_calib"]["left_gate_x"], 110)
+            # Video 3 inherited Video 2's custom calibration (without Video 2's base_gray)
+            self.assertEqual(app.video_data[2]["custom_calib"]["left_gate_x"], 110)
+            self.assertEqual(app.video_data[2]["custom_calib"]["fault_pct"], 74)
+            self.assertNotIn("base_gray", app.video_data[2]["custom_calib"])
+
+            # Now execute parallel processing and verify each video's pending_result has its own roi_data
+            roi_cfg = mt.ROIConfig(
+                rx=30, ry=40, rw=550, rh=150,
+                left_gate_x=85, right_gate_x=515,
+                dark_t=140, diff_t=22, ladder_t=125, fault_pct=68,
+                z_active=True, kin_active=True,
+                dip_cooldown_sec=0.50, dip_min_dist_px=30,
+                gate_dist_cm=60.0, px_per_cm=(515 - 85) / 60.0,
+                frame_stride=1, use_gpu=False, use_kalman=True,
+                bidirectional=False, protocol_runs="1", lock_lr=True,
+            )
+            app._run_flags = {
+                "use_gpu": False, "auto_calib": False, "use_yolo_fusion": False,
+                "dlc_superanimal": False, "dlc_export_train": False,
+                "enable_review": False, "lock_lr_active": True, "use_comma": False,
+            }
+            app.execute_parallel_processing(app.video_data, roi_cfg, max_workers=1)
+            self.assertEqual(len(app.pending_results), 3)
+            res_by_uid = {r["uid"]: r["roi_data"] for r in app.pending_results}
+            self.assertEqual(res_by_uid["u1"][:6], (30, 40, 550, 150, 85, 515))
+            self.assertEqual(res_by_uid["u2"][:6], (45, 50, 520, 140, 110, 490))
+            self.assertEqual(res_by_uid["u3"][:6], (45, 50, 520, 140, 110, 490))
 
 
 if __name__ == "__main__":

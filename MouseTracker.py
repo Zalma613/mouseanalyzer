@@ -518,6 +518,7 @@ TRANSLATIONS = {
         "sub_exec": "ELEMZÉS INDÍTÁSA",
         "chk_rev": "Interaktív esemény-ellenőrző ablak megnyitása",
         "chk_auto_calib": "Automatikus adaptív létra- és alany-kalibráció",
+        "chk_per_video_calib": "Videónkénti egyedi kalibráció kérése (kapuk, ROI, küszöbök)",
         "chk_yolo_fusion": "YOLO + anatómiai 9-pontos csontváz illesztés",
         "chk_lock_lr": "Bal -> Jobb anatómiai tengely rögzítése (100% orr/farok pontosság)",
         "chk_bidirectional": "Kétirányú és teljes mozgáskövetés (100% lefedettség)",
@@ -595,6 +596,7 @@ TRANSLATIONS = {
         "tt_remove_vid": "A kijelölt felvétel eltávolítása a munkaterületről.",
         "tt_clear_vid": "A teljes felvétellista ürítése.",
         "tt_auto_calib": "Automatikusan detektálja a létrát, kapukat, létragörbületet és optimális paramétereket.",
+        "tt_per_video_calib": "Bekapcsolva minden egyes felvételhez külön megnyitja a vizuális kalibrációs előnézetet (kapupozíciók, ROI, küszöbértékek).",
         "tt_yolo": "YOLO objektumdetekció és 9-pontos anatómiai csontváz illesztés.",
         "tt_rev": "Az elemzés végén nagyítható ellenőrző ablakot nyit meg az események áttekintéséhez.",
         "tt_gatecm": "A Start és Cél kapu közötti fizikai távolság centiméterben a valós sebességszámításhoz.",
@@ -658,6 +660,8 @@ TRANSLATIONS = {
         "calib_tb_ladder": "Letra Maszk",
         "calib_tb_fault": "Hibavonal %",
         "calib_overlay_hint": "ZOLD KAPU=Start | PIROS KAPU=Cel | PIROS VONAL=Hibavonal | ENTER=Inditas | R=Alaphelyzet",
+        "calib_overlay_hint_multi": "ZOLD=Start | PIROS=Cel | SHIFT+Bal=ROI | ENTER=Kovetkezo ({idx}/{total}) | A=Mindhez alkalmaz | R=Alaphelyzet",
+        "calib_video_banner": "VIDEO [{idx}/{total}]: {name} (ID: #{id})",
         "tt_rev_prev": "Ugrás az előző detektált lábhibára / eseményre [A]",
         "tt_rev_next": "Ugrás a következő detektált lábhibára / eseményre [D]",
         "tt_rev_valid": "Esemény érvényességének váltása: ÉRVÉNYES ↔ KIZÁRVA [Szóköz]",
@@ -727,6 +731,7 @@ TRANSLATIONS = {
         "sub_exec": "EXECUTION CONTROL",
         "chk_rev": "Open interactive event verification window",
         "chk_auto_calib": "Automatic adaptive ladder & subject calibration",
+        "chk_per_video_calib": "Ask for per-video calibration settings (gates, ROI, thresholds)",
         "chk_yolo_fusion": "YOLO + anatomical 9-point skeleton fitting",
         "chk_lock_lr": "Lock Left -> Right anatomical heading (prevents nose/tail flip)",
         "chk_bidirectional": "Bidirectional & continuous tracking (100% movement capture)",
@@ -804,6 +809,7 @@ TRANSLATIONS = {
         "tt_remove_vid": "Remove selected recording from queue.",
         "tt_clear_vid": "Clear all recordings from queue.",
         "tt_auto_calib": "Automatically detects ladder ROI, gates, sag, and optimal thresholds.",
+        "tt_per_video_calib": "When enabled, prompts you on each video in the queue to configure gate positions, ROI, and thresholds individually.",
         "tt_yolo": "Combines YOLO detection with 9-point articulated rodent skeleton fitting.",
         "tt_rev": "Opens zoomable inspector window to review and validate detected slips.",
         "tt_gatecm": "Physical distance between Start and Goal gates in cm for velocity scaling.",
@@ -867,6 +873,8 @@ TRANSLATIONS = {
         "calib_tb_ladder": "Rung Mask",
         "calib_tb_fault": "Fault Line %",
         "calib_overlay_hint": "GREEN GATE=Start | RED GATE=Goal | RED LINE=Fault Line | ENTER=Start Analysis | R=Reset View",
+        "calib_overlay_hint_multi": "GREEN=Start | RED=Goal | SHIFT+LeftDrag=ROI | ENTER=Next ({idx}/{total}) | A=Apply to All | R=Reset",
+        "calib_video_banner": "VIDEO [{idx}/{total}]: {name} (ID: #{id})",
         "tt_rev_prev": "Jump to previous detected foot fault or event [A]",
         "tt_rev_next": "Jump to next detected foot fault or event [D]",
         "tt_rev_valid": "Toggle event validity: VALID ↔ IGNORED [Space]",
@@ -1744,13 +1752,23 @@ class ParallelYoloOpenCVEngine:
                 "yolov8n-seg.pt",
                 "yolov8n.pt",
             ):
-                p = get_resource_path(candidate)
-                if not os.path.exists(p):
-                    p = os.path.join(SAFE_BASE_DIR, candidate)
+                safe_p = os.path.join(SAFE_BASE_DIR, candidate)
+                res_p = get_resource_path(candidate)
+                # Prefer user-trained weights in SAFE_BASE_DIR (or newer mtime if both exist)
+                if os.path.exists(safe_p) and os.path.exists(res_p):
+                    try:
+                        p = safe_p if os.path.getmtime(safe_p) >= os.path.getmtime(res_p) else res_p
+                    except OSError:
+                        p = safe_p
+                elif os.path.exists(safe_p):
+                    p = safe_p
+                else:
+                    p = res_p
                 if os.path.exists(p):
                     with self.yolo_lock:
                         self.yolo_model = YOLO(p)
                         self.model_name = candidate
+                        self.model_path = os.path.abspath(p)
                         names = getattr(self.yolo_model, "names", {}) or {}
                         is_pose = ("pose" in candidate.lower()) or getattr(self.yolo_model, "task", "") == "pose"
                         self.is_pose_model = is_pose
@@ -1781,7 +1799,7 @@ class ParallelYoloOpenCVEngine:
                         mode_tag = "YOLO Bounding Box + Anatomical OpenCV"
                     else:
                         mode_tag = "YOLO Object Detection + OpenCV"
-                    self.log(f"⚡ [{mode_tag}] Loaded '{candidate}' on ({self.device.upper()})")
+                    self.log(f"⚡ [{mode_tag}] Loaded '{candidate}' from '{self.model_path}' on ({self.device.upper()})")
                     return
         except Exception as e:
             logger.debug("YOLO initialization exception: %s", e)
@@ -3396,7 +3414,16 @@ class DLCAddonManager:
 
             base_pt = None
             for cand_name in base_weight_candidates:
-                for cand_path in (get_resource_path(cand_name), os.path.join(SAFE_BASE_DIR, cand_name)):
+                safe_cand = os.path.join(SAFE_BASE_DIR, cand_name)
+                res_cand = get_resource_path(cand_name)
+                ordered_cands = (safe_cand, res_cand)
+                if os.path.exists(safe_cand) and os.path.exists(res_cand):
+                    try:
+                        if os.path.getmtime(res_cand) > os.path.getmtime(safe_cand):
+                            ordered_cands = (res_cand, safe_cand)
+                    except OSError:
+                        pass
+                for cand_path in ordered_cands:
                     if os.path.exists(cand_path):
                         base_pt = cand_path
                         break
@@ -3831,6 +3858,7 @@ class PerVideoIDTrackerApp:
         self.saved_geometry = None
 
         self.var_auto_calib = tk.BooleanVar(value=True)
+        self.var_per_video_calib = tk.BooleanVar(value=False)
         self.var_yolo_fusion = tk.BooleanVar(value=True)
         self.var_bidirectional = tk.BooleanVar(value=False)
         self.var_lock_lr_direction = tk.BooleanVar(value=True)
@@ -4307,6 +4335,12 @@ class PerVideoIDTrackerApp:
         self.chk_auto_calib.pack(anchor="w", fill="x", pady=1)
         ToolTip(self.chk_auto_calib, lambda: self.tr("tt_auto_calib"))
 
+        self.chk_per_video_calib = ttk.Checkbutton(
+            chk_group, text=self.tr("chk_per_video_calib"), variable=self.var_per_video_calib, style="Dark.TCheckbutton"
+        )
+        self.chk_per_video_calib.pack(anchor="w", fill="x", pady=1)
+        ToolTip(self.chk_per_video_calib, lambda: self.tr("tt_per_video_calib"))
+
         self.chk_yolo_fusion = ttk.Checkbutton(
             chk_group, text=self.tr("chk_yolo_fusion"), variable=self.var_yolo_fusion, style="Dark.TCheckbutton"
         )
@@ -4681,6 +4715,7 @@ class PerVideoIDTrackerApp:
         chk_panel.pack(side="top", fill="x", pady=(0, 12))
 
         for tr_key, var in [
+            ("chk_per_video_calib", self.var_per_video_calib),
             ("chk_yolo_fusion", self.var_yolo_fusion),
             ("chk_lock_lr", self.var_lock_lr_direction),
             ("chk_bidirectional", self.var_bidirectional),
@@ -4763,6 +4798,8 @@ class PerVideoIDTrackerApp:
         if hasattr(self, "lbl_sub_exec"):
             self.lbl_sub_exec.config(text=self.tr("sub_exec"))
         self.chk_auto_calib.config(text=self.tr("chk_auto_calib"))
+        if hasattr(self, "chk_per_video_calib"):
+            self.chk_per_video_calib.config(text=self.tr("chk_per_video_calib"))
         self.chk_yolo_fusion.config(text=self.tr("chk_yolo_fusion"))
         if hasattr(self, "chk_lock_lr"):
             self.chk_lock_lr.config(text=self.tr("chk_lock_lr"))
@@ -5556,20 +5593,25 @@ class PerVideoIDTrackerApp:
         def _test_current_model():
             if is_busy[0]:
                 return
-            local_pt = get_resource_path("mouse_pose_ai.pt")
-            if not os.path.exists(local_pt):
-                safe_pt = os.path.join(SAFE_BASE_DIR, "mouse_pose_ai.pt")
-                if os.path.exists(safe_pt):
+            local_pt = None
+            for cand in ("mouse_pose_ai.pt", "rodent_detector.pt"):
+                safe_pt = os.path.join(SAFE_BASE_DIR, cand)
+                res_pt = get_resource_path(cand)
+                if os.path.exists(safe_pt) and os.path.exists(res_pt):
+                    try:
+                        local_pt = safe_pt if os.path.getmtime(safe_pt) >= os.path.getmtime(res_pt) else res_pt
+                    except OSError:
+                        local_pt = safe_pt
+                    break
+                elif os.path.exists(safe_pt):
                     local_pt = safe_pt
-                else:
-                    local_pt = get_resource_path("rodent_detector.pt")
-                    if not os.path.exists(local_pt):
-                        safe_pt = os.path.join(SAFE_BASE_DIR, "rodent_detector.pt")
-                        if os.path.exists(safe_pt):
-                            local_pt = safe_pt
-                        else:
-                            messagebox.showinfo(APP_NAME, self.tr("train_no_model_msg"), parent=preview_win)
-                            return
+                    break
+                elif os.path.exists(res_pt):
+                    local_pt = res_pt
+                    break
+            if not local_pt:
+                messagebox.showinfo(APP_NAME, self.tr("train_no_model_msg"), parent=preview_win)
+                return
             _set_controls_busy(True)
             txt_log.insert("end", self.tr("train_testing_log", name=os.path.basename(local_pt)))
             txt_log.see("end")
@@ -5976,6 +6018,7 @@ class PerVideoIDTrackerApp:
             "gate_dist_cm": gate_cm_val,
             "frame_stride": stride_val,
             "auto_calib": self.var_auto_calib.get(),
+            "per_video_calib": self.var_per_video_calib.get(),
             "yolo_fusion": self.var_yolo_fusion.get(),
             "bidirectional": self.var_bidirectional.get(),
             "enable_zones": self.var_enable_zones.get(),
@@ -6014,6 +6057,7 @@ class PerVideoIDTrackerApp:
 
         for key, var in [
             ("auto_calib", self.var_auto_calib),
+            ("per_video_calib", self.var_per_video_calib),
             ("yolo_fusion", self.var_yolo_fusion),
             ("bidirectional", self.var_bidirectional),
             ("enable_zones", self.var_enable_zones),
@@ -6537,6 +6581,9 @@ class PerVideoIDTrackerApp:
         self.btn_quick_start.config(state="disabled")
         self.btn_stop.config(state="normal")
         self._set_queue_controls_state("disabled")
+
+        for v_item in self.video_data:
+            v_item.pop("custom_calib", None)
 
         if self.saved_geometry and not self.var_auto_calib.get():
             g = self.saved_geometry
@@ -7429,12 +7476,17 @@ class PerVideoIDTrackerApp:
                         # Verify anatomically viable limb reach from parent joint
                         if dx > max(48, torso_width * 0.48) or dy < -10 or dy > 95:
                             return geo_pt
-                        if conf >= 0.50:
-                            ai_w = 0.80
+                        # When the trained AI detects a paw slip below the fault line that OpenCV missed,
+                        # or when AI confidence is high, trust the trained AI keypoint directly.
+                        f_y_at_ap = int(fault_curve[int(np.clip(ap[0], 0, len(fault_curve) - 1))])
+                        if ap[1] >= f_y_at_ap + 4 and geo_pt[1] < f_y_at_ap and conf >= 0.35:
+                            ai_w = 0.92
+                        elif conf >= 0.50:
+                            ai_w = 0.85
                         elif conf >= 0.30:
-                            ai_w = 0.65
+                            ai_w = 0.70
                         else:
-                            ai_w = 0.40
+                            ai_w = 0.45
                         return (
                             int(np.clip(round((1.0 - ai_w) * geo_pt[0] + ai_w * ap[0]), 0, mw - 1)),
                             int(np.clip(round((1.0 - ai_w) * geo_pt[1] + ai_w * ap[1]), 0, mh - 1)),
@@ -7589,9 +7641,25 @@ class PerVideoIDTrackerApp:
             below_fault = (rows >= fault_curve[None, :]).astype(np.uint8) * 255
         paw_zone = cv2.bitwise_and(mouse_mask, cv2.bitwise_and(spotlight, below_fault))
 
+        # Reinforce paw_zone with trained AI pose keypoints when a paw dips below the fault curve
+        if getattr(self, "hybrid_locator", None) is not None and getattr(self.hybrid_locator, "is_rodent_pose", False):
+            for p_parent, p_paw in (("shoulder_pt", "fore_paw_pt"), ("hip_pt", "hind_paw_pt")):
+                pt_paw = anatomy.get(p_paw)
+                pt_par = anatomy.get(p_parent)
+                if pt_paw is not None and pt_par is not None:
+                    px_k, py_k = int(np.clip(pt_paw[0], 0, mw - 1)), int(np.clip(pt_paw[1], 0, mh - 1))
+                    f_y_k = int(fault_curve[px_k])
+                    if py_k >= f_y_k + 6 and active_x1 <= px_k <= active_x2:
+                        ai_limb = np.zeros_like(mouse_mask)
+                        cv2.line(ai_limb, (int(pt_par[0]), int(pt_par[1])), (px_k, py_k), 255, 6, cv2.LINE_AA)
+                        cv2.circle(ai_limb, (px_k, py_k), 4, 255, -1)
+                        paw_zone = cv2.bitwise_or(paw_zone, cv2.bitwise_and(ai_limb, below_fault))
+
         gated_mask = cv2.bitwise_and(
             mouse_mask, cv2.bitwise_or(cv2.bitwise_not(below_fault), paw_zone)
         )
+        if np.any(paw_zone):
+            gated_mask = cv2.bitwise_or(gated_mask, paw_zone)
         return gated_mask
 
     def _check_real_dip_below_line(
@@ -7979,52 +8047,95 @@ class PerVideoIDTrackerApp:
                     best_idx = int(idx)
         return best_idx
 
-    def setup_and_run_parallel(self):
-        first_video = self.video_data[0]["path"]
-        cap = open_video_accelerated(first_video, use_hw=self.var_use_gpu.get())
+    def _interactive_calibrate_video(self, video_item, idx, total_to_calibrate, prev_calib=None):
+        """
+        Opens the interactive OpenCV visual calibration preview for a single video.
+        Returns a tuple `(calib_dict, apply_to_remaining)` where `calib_dict` is None if cancelled.
+        Supports:
+        - Left-click to reposition Start (left) or Goal (right) gate X.
+        - Shift + Left-drag to draw/adjust the ladder ROI box (rx, ry, rw, rh).
+        - Trackbars for Frame, Dark threshold, Motion diff threshold, Ladder mask threshold, and Fault line %.
+        - Enter / Space to confirm for this video and advance to the next.
+        - 'A' to confirm and apply these settings to all remaining videos in the queue.
+        - 'R' to reset zoom/pan viewport.
+        - Esc / closing window to cancel the calibration workflow.
+        """
+        video_path = video_item["path"]
+        video_name = video_item.get("name", os.path.basename(video_path))
+        animal_id = video_item.get("id", "1")
+        uid = video_item.get("uid", "")
+
+        if uid:
+            self.update_row_status(uid, f"Calibrating ({idx}/{total_to_calibrate})...")
+
+        cap = open_video_accelerated(video_path, use_hw=self.var_use_gpu.get())
         if not cap.isOpened():
-            messagebox.showerror("Error", "Could not open the first video!")
-            self.reset_ui()
-            return
+            messagebox.showerror("Error", f"Could not open video: {video_name}")
+            return None, False
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         ret, first_frame = cap.read()
         if not ret or first_frame is None:
             cap.release()
-            messagebox.showerror("Error", "Could not read first video frame!")
-            self.reset_ui()
-            return
+            messagebox.showerror("Error", f"Could not read first video frame: {video_name}")
+            return None, False
 
         frame_h, frame_w = first_frame.shape[:2]
         start_preview_frame = None
         base_gray = None
+
+        dark_t_init = int(prev_calib.get("dark_t", self.calib_dark_thresh)) if prev_calib else self.calib_dark_thresh
+        diff_t_init = int(prev_calib.get("diff_t", self.calib_diff_thresh)) if prev_calib else self.calib_diff_thresh
+        ladder_t_init = int(prev_calib.get("ladder_t", self.calib_ladder_thresh)) if prev_calib else self.calib_ladder_thresh
+        fault_pct_init = int(prev_calib.get("fault_pct", self.calib_fault_Ratio)) if prev_calib else self.calib_fault_Ratio
 
         if self.var_auto_calib.get():
             try:
                 calib = self.auto_engine.auto_calibrate_from_video(cap, num_bg_samples=28)
                 rx, ry, rw, rh = calib["rx"], calib["ry"], calib["rw"], calib["rh"]
                 left_gate_x, right_gate_x = calib["left_gate_x"], calib["right_gate_x"]
-                self.calib_dark_thresh = calib["calib_dark_thresh"]
-                self.calib_diff_thresh = calib["calib_diff_thresh"]
-                self.calib_ladder_thresh = calib["calib_ladder_thresh"]
-                self.calib_fault_Ratio = calib["calib_fault_Ratio"]
+                dark_t_init = calib["calib_dark_thresh"]
+                diff_t_init = calib["calib_diff_thresh"]
+                ladder_t_init = calib["calib_ladder_thresh"]
+                fault_pct_init = calib["calib_fault_Ratio"]
                 start_preview_frame = calib.get("best_preview_frame")
                 base_gray = calib.get("roi_bg")
             except Exception as e:
-                self.log(f"⚠ Auto-calib fallback ({e})")
-                rx, ry, rw, rh = int(frame_w * 0.05), int(frame_h * 0.35), int(frame_w * 0.90), int(frame_h * 0.30)
-                left_gate_x, right_gate_x = int(rx + rw * 0.10), int(rx + rw * 0.86)
+                self.log(f"⚠ Auto-calib fallback for {video_name} ({e})")
+                if prev_calib:
+                    rx = min(max(0, int(prev_calib["rx"])), frame_w - 20)
+                    ry = min(max(0, int(prev_calib["ry"])), frame_h - 20)
+                    rw = min(max(60, int(prev_calib["rw"])), frame_w - rx)
+                    rh = min(max(30, int(prev_calib["rh"])), frame_h - ry)
+                    left_gate_x = int(np.clip(prev_calib["left_gate_x"], rx + 5, rx + rw - 45))
+                    right_gate_x = int(np.clip(prev_calib["right_gate_x"], left_gate_x + 40, rx + rw - 5))
+                else:
+                    rx, ry, rw, rh = int(frame_w * 0.05), int(frame_h * 0.35), int(frame_w * 0.90), int(frame_h * 0.30)
+                    left_gate_x, right_gate_x = int(rx + rw * 0.10), int(rx + rw * 0.86)
+        elif prev_calib:
+            rx = min(max(0, int(prev_calib["rx"])), frame_w - 20)
+            ry = min(max(0, int(prev_calib["ry"])), frame_h - 20)
+            rw = min(max(60, int(prev_calib["rw"])), frame_w - rx)
+            rh = min(max(30, int(prev_calib["rh"])), frame_h - ry)
+            left_gate_x = int(np.clip(prev_calib["left_gate_x"], rx + 5, rx + rw - 45))
+            right_gate_x = int(np.clip(prev_calib["right_gate_x"], left_gate_x + 40, rx + rw - 5))
+        elif self.saved_geometry:
+            g = self.saved_geometry
+            rx = min(max(0, int(g["rx"])), frame_w - 20)
+            ry = min(max(0, int(g["ry"])), frame_h - 20)
+            rw = min(max(60, int(g["rw"])), frame_w - rx)
+            rh = min(max(30, int(g["rh"])), frame_h - ry)
+            left_gate_x = int(np.clip(g["left_gate_x"], rx + 5, rx + rw - 45))
+            right_gate_x = int(np.clip(g["right_gate_x"], left_gate_x + 40, rx + rw - 5))
         else:
             rx, ry, rw, rh = int(frame_w * 0.05), int(frame_h * 0.35), int(frame_w * 0.90), int(frame_h * 0.30)
             left_gate_x, right_gate_x = int(rx + rw * 0.10), int(rx + rw * 0.86)
 
-        if base_gray is None:
+        if base_gray is None or base_gray.shape[:2] != (rh, rw):
             base_gray = self._compute_clean_background(cap, rx, ry, rw, rh, num_samples=28)
         if base_gray is None:
             cap.release()
-            self.reset_ui()
-            return
-        self._cached_first_video_bg = (first_video, (rx, ry, rw, rh), base_gray)
+            return None, False
 
         if start_preview_frame is None:
             start_preview_frame = self._find_best_mouse_preview_frame(cap, base_gray, rx, ry, rw, rh, total_frames)
@@ -8045,21 +8156,49 @@ class PerVideoIDTrackerApp:
         tb_fault = self.tr("calib_tb_fault")
 
         cv2.createTrackbar(tb_frame, win_calib, int(start_preview_frame), max(1, total_frames - 1), on_trackbar_change)
-        cv2.createTrackbar(tb_dark, win_calib, self.calib_dark_thresh, 220, on_trackbar_change)
-        cv2.createTrackbar(tb_diff, win_calib, self.calib_diff_thresh, 100, on_trackbar_change)
-        cv2.createTrackbar(tb_ladder, win_calib, self.calib_ladder_thresh, 200, on_trackbar_change)
-        cv2.createTrackbar(tb_fault, win_calib, self.calib_fault_Ratio, 96, on_trackbar_change)
+        cv2.createTrackbar(tb_dark, win_calib, int(dark_t_init), 220, on_trackbar_change)
+        cv2.createTrackbar(tb_diff, win_calib, int(diff_t_init), 100, on_trackbar_change)
+        cv2.createTrackbar(tb_ladder, win_calib, int(ladder_t_init), 200, on_trackbar_change)
+        cv2.createTrackbar(tb_fault, win_calib, int(fault_pct_init), 96, on_trackbar_change)
+
+        roi_drag_start = [None]
+        roi_drag_preview = [None]
 
         def calib_mouse_cb(event, x, y, flags, param):
-            nonlocal left_gate_x, right_gate_x
+            nonlocal rx, ry, rw, rh, left_gate_x, right_gate_x, base_gray
             if vp_calib.handle_mouse(event, x, y, flags):
                 return
+            shift_held = bool(flags & cv2.EVENT_FLAG_SHIFTKEY)
             if event == cv2.EVENT_LBUTTONDOWN:
-                ix, _ = vp_calib.screen_to_image(x, y)
-                if abs(ix - left_gate_x) <= abs(ix - right_gate_x):
-                    left_gate_x = int(np.clip(ix, rx + 5, right_gate_x - 40))
+                ix, iy = vp_calib.screen_to_image(x, y)
+                if shift_held:
+                    roi_drag_start[0] = (ix, iy)
+                    roi_drag_preview[0] = (ix, iy, ix, iy)
                 else:
-                    right_gate_x = int(np.clip(ix, left_gate_x + 40, rx + rw - 5))
+                    if abs(ix - left_gate_x) <= abs(ix - right_gate_x):
+                        left_gate_x = int(np.clip(ix, rx + 5, right_gate_x - 40))
+                    else:
+                        right_gate_x = int(np.clip(ix, left_gate_x + 40, rx + rw - 5))
+                vp_calib.dirty = True
+            elif event == cv2.EVENT_MOUSEMOVE and roi_drag_start[0] is not None:
+                ix, iy = vp_calib.screen_to_image(x, y)
+                sx, sy = roi_drag_start[0]
+                roi_drag_preview[0] = (sx, sy, ix, iy)
+                vp_calib.dirty = True
+            elif event == cv2.EVENT_LBUTTONUP and roi_drag_start[0] is not None:
+                ix, iy = vp_calib.screen_to_image(x, y)
+                sx, sy = roi_drag_start[0]
+                roi_drag_start[0] = None
+                roi_drag_preview[0] = None
+                x0, x1 = sorted((int(np.clip(sx, 0, frame_w - 1)), int(np.clip(ix, 0, frame_w - 1))))
+                y0, y1 = sorted((int(np.clip(sy, 0, frame_h - 1)), int(np.clip(iy, 0, frame_h - 1))))
+                if (x1 - x0) >= 80 and (y1 - y0) >= 35:
+                    rx, ry, rw, rh = x0, y0, x1 - x0, y1 - y0
+                    left_gate_x = int(np.clip(left_gate_x, rx + 5, rx + rw - 45))
+                    right_gate_x = int(np.clip(right_gate_x, left_gate_x + 40, rx + rw - 5))
+                    new_bg = self._compute_clean_background(cap, rx, ry, rw, rh, num_samples=20)
+                    if new_bg is not None:
+                        base_gray = new_bg
                 vp_calib.dirty = True
 
         cv2.setMouseCallback(win_calib, calib_mouse_cb)
@@ -8068,6 +8207,8 @@ class PerVideoIDTrackerApp:
         current_calib_frame = first_frame.copy()
         cached_disp = first_frame.copy()
         last_params = None
+        apply_to_remaining = False
+        confirmed = False
 
         while True:
             # Service Tkinter event loop to prevent OS application hang alerts
@@ -8080,8 +8221,7 @@ class PerVideoIDTrackerApp:
             if not self.is_running or not is_window_open(win_calib):
                 close_opencv_windows()
                 cap.release()
-                self.reset_ui()
-                return
+                return None, False
 
             f_idx = max(0, cv2.getTrackbarPos(tb_frame, win_calib))
             dark_t = max(50, cv2.getTrackbarPos(tb_dark, win_calib))
@@ -8089,7 +8229,7 @@ class PerVideoIDTrackerApp:
             ladder_t = max(30, cv2.getTrackbarPos(tb_ladder, win_calib))
             fault_pct = max(25, cv2.getTrackbarPos(tb_fault, win_calib))
 
-            curr_params = (f_idx, dark_t, diff_t, ladder_t, fault_pct, left_gate_x, right_gate_x)
+            curr_params = (f_idx, dark_t, diff_t, ladder_t, fault_pct, rx, ry, rw, rh, left_gate_x, right_gate_x, roi_drag_preview[0])
 
             if curr_params != last_params:
                 if f_idx != last_track_frame:
@@ -8146,13 +8286,32 @@ class PerVideoIDTrackerApp:
                             disp, d_part, (rx + dip_x_loc - 35, ry + dip_y_loc + 24),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.48, dip_col, 2
                         )
+                elif getattr(self.hybrid_locator, "is_rodent_pose", False):
+                    ai_pose_cal = getattr(self.hybrid_locator._tls, "last_pose", None) or getattr(self.hybrid_locator, "last_sync_pose", None)
+                    if ai_pose_cal:
+                        self._draw_rodent_skeleton(disp, ai_pose_cal, offset_x=rx, offset_y=ry)
 
                 cv2.rectangle(disp, (rx, ry), (rx + rw, ry + rh), (255, 140, 0), 2)
+                if roi_drag_preview[0] is not None:
+                    sx, sy, ex, ey = roi_drag_preview[0]
+                    cv2.rectangle(disp, (int(sx), int(sy)), (int(ex), int(ey)), (0, 255, 255), 2)
+
                 cv2.line(disp, (left_gate_x, ry), (left_gate_x, ry + rh), (50, 255, 50), 2)
                 cv2.line(disp, (right_gate_x, ry), (right_gate_x, ry + rh), (50, 50, 255), 2)
+
+                if total_to_calibrate > 1:
+                    hint_txt = self.tr("calib_overlay_hint_multi", idx=idx, total=total_to_calibrate)
+                else:
+                    hint_txt = self.tr("calib_overlay_hint")
+
                 cv2.putText(
-                    disp, self.tr("calib_overlay_hint"),
-                    (20, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2
+                    disp, hint_txt,
+                    (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 255), 2
+                )
+                banner_txt = self.tr("calib_video_banner", idx=idx, total=total_to_calibrate, name=video_name, id=animal_id)
+                cv2.putText(
+                    disp, banner_txt,
+                    (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.54, (50, 255, 200), 2
                 )
 
                 cached_disp = disp
@@ -8165,21 +8324,103 @@ class PerVideoIDTrackerApp:
 
             key = cv2.waitKey(40) & 0xFF
             if key in (13, 32):
-                self.calib_dark_thresh = dark_t
-                self.calib_diff_thresh = diff_t
-                self.calib_ladder_thresh = ladder_t
-                self.calib_fault_Ratio = fault_pct
+                confirmed = True
+                break
+            elif key in (ord('a'), ord('A')) and total_to_calibrate > 1:
+                confirmed = True
+                apply_to_remaining = True
                 break
             elif key in (ord('r'), ord('R')):
                 vp_calib.reset()
             elif key == 27:
                 close_opencv_windows()
                 cap.release()
-                self.reset_ui()
-                return
+                return None, False
 
         close_opencv_windows()
         cap.release()
+
+        if not confirmed:
+            return None, False
+
+        calib_res = {
+            "rx": rx,
+            "ry": ry,
+            "rw": rw,
+            "rh": rh,
+            "left_gate_x": left_gate_x,
+            "right_gate_x": right_gate_x,
+            "dark_t": dark_t,
+            "diff_t": diff_t,
+            "ladder_t": ladder_t,
+            "fault_pct": fault_pct,
+            "base_gray": base_gray,
+        }
+        return calib_res, apply_to_remaining
+
+    def setup_and_run_parallel(self):
+        per_video_mode = bool(self.var_per_video_calib.get()) and len(self.video_data) > 1
+        videos_to_calibrate = list(self.video_data) if per_video_mode else [self.video_data[0]]
+        total_cal = len(videos_to_calibrate)
+
+        for v_item in self.video_data:
+            v_item.pop("custom_calib", None)
+
+        prev_calib = None
+        first_calib = None
+
+        for idx, v_item in enumerate(videos_to_calibrate, start=1):
+            calib_res, apply_all = self._interactive_calibrate_video(
+                v_item, idx, total_cal, prev_calib=prev_calib
+            )
+            if calib_res is None:
+                self.reset_ui()
+                return
+
+            if idx == 1:
+                first_calib = calib_res
+                self._cached_first_video_bg = (
+                    v_item["path"],
+                    (calib_res["rx"], calib_res["ry"], calib_res["rw"], calib_res["rh"]),
+                    calib_res.get("base_gray"),
+                )
+
+            self.calib_dark_thresh = calib_res["dark_t"]
+            self.calib_diff_thresh = calib_res["diff_t"]
+            self.calib_ladder_thresh = calib_res["ladder_t"]
+            self.calib_fault_Ratio = calib_res["fault_pct"]
+
+            if per_video_mode:
+                v_item["custom_calib"] = dict(calib_res)
+                if v_item.get("uid"):
+                    self.update_row_status(v_item["uid"], self.tr("status_waiting"))
+                self.log(
+                    f"🎯 [{idx}/{total_cal}] Calibrated {v_item['name']} (#{v_item['id']}): "
+                    f"Gates=[{calib_res['left_gate_x']}, {calib_res['right_gate_x']}] px, "
+                    f"ROI={calib_res['rw']}x{calib_res['rh']}, Fault={calib_res['fault_pct']}%"
+                )
+                if apply_all and idx < total_cal:
+                    for rem_item in videos_to_calibrate[idx:]:
+                        rem_copy = dict(calib_res)
+                        rem_copy.pop("base_gray", None)
+                        rem_item["custom_calib"] = rem_copy
+                        if rem_item.get("uid"):
+                            self.update_row_status(rem_item["uid"], self.tr("status_waiting"))
+                    self.log(f"⏭ Applied calibration settings from {v_item['name']} to remaining {total_cal - idx} video(s).")
+                    break
+
+            prev_calib = calib_res
+
+        if first_calib is None:
+            self.reset_ui()
+            return
+
+        rx = first_calib["rx"]
+        ry = first_calib["ry"]
+        rw = first_calib["rw"]
+        rh = first_calib["rh"]
+        left_gate_x = first_calib["left_gate_x"]
+        right_gate_x = first_calib["right_gate_x"]
 
         self.saved_geometry = {
             "rx": rx, "ry": ry, "rw": rw, "rh": rh,
@@ -8348,8 +8589,22 @@ class PerVideoIDTrackerApp:
 
             is_first_video = bool(video_data and uid == video_data[0].get("uid"))
             auto_calib_flag = bool((getattr(self, "_run_flags", {}) or {}).get("auto_calib", False))
+            custom_cal = item.get("custom_calib")
 
-            if not is_first_video and auto_calib_flag:
+            if isinstance(custom_cal, dict):
+                cur_rx = custom_cal.get("rx", cur_rx)
+                cur_ry = custom_cal.get("ry", cur_ry)
+                cur_rw = custom_cal.get("rw", cur_rw)
+                cur_rh = custom_cal.get("rh", cur_rh)
+                cur_left_gate_x = custom_cal.get("left_gate_x", cur_left_gate_x)
+                cur_right_gate_x = custom_cal.get("right_gate_x", cur_right_gate_x)
+                cur_dark_t = custom_cal.get("dark_t", cur_dark_t)
+                cur_diff_t = custom_cal.get("diff_t", cur_diff_t)
+                cur_ladder_t = custom_cal.get("ladder_t", cur_ladder_t)
+                cur_fault_pct = custom_cal.get("fault_pct", cur_fault_pct)
+                cur_px_per_cm = max(1, cur_right_gate_x - cur_left_gate_x) / max(0.1, float(_gate_dist_cm))
+                base_gray = custom_cal.get("base_gray")
+            elif not is_first_video and auto_calib_flag:
                 try:
                     v_cal = self.auto_engine.auto_calibrate_from_video(cap, num_bg_samples=28)
                     cur_rx, cur_ry, cur_rw, cur_rh = v_cal["rx"], v_cal["ry"], v_cal["rw"], v_cal["rh"]
