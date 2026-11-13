@@ -31,8 +31,8 @@ A program minden olyan eseményt vizsgál, ahol az állat körvonala vagy kulcsp
 | `Mancs_Labhiba_Db` | A végtagokhoz (`PAW`) tartozó lábhibák száma (`Mellso_Labhiba_Db + Hatso_Labhiba_Db`). |
 | `Mellso_Labhiba_Db` | Mellső lábhoz (`FOREPAW`) sorolt hibák száma. (Ha a végtag alosztálya nem dönthető el egyértelműen, a fennmaradó `PAW` események ide kerülnek.) |
 | `Hatso_Labhiba_Db` | Hátsó lábhoz (`HINDPAW`) sorolt hibák száma. |
-| `Enyhe_Megcsuszas_Db` | Olyan `PAW` események száma, ahol a hibavonal alatti lenyúlási mélység $\text{dip\_depth} < 20\text{ px}$. |
-| `Mely_Leleses_Db` | Olyan `PAW` események száma, ahol $\text{dip\_depth} \ge 20\text{ px}$. |
+| `Enyhe_Megcsuszas_Db` | Olyan `PAW` események száma, ahol a hibavonal alatti lenyúlási mélység `dip_depth` $< 20\text{ px}$. |
+| `Mely_Leleses_Db` | Olyan `PAW` események száma, ahol `dip_depth` $\ge 20\text{ px}$. |
 | `Orr_Lenezes_Db` | `NOSE` kódú események száma (orral való lefelé nézés / exploráció – nem valódi lábhiba). |
 | `Hatso_Farok_Db` | `HIND_TAIL` kódú események száma (farok vagy hátsó testrész belógása). |
 | `Melynyulasok_Idopontjai_mp` | Az egyes érvényes események időpontjai másodpercben felsorolva. |
@@ -42,7 +42,7 @@ A program minden olyan eseményt vizsgál, ahol az állat körvonala vagy kulcsp
 ## 3. Megállások és mikro-megtorpanások
 
 Két egymást követő feldolgozott képkocka között az állat akkor számít egy helyben állónak, ha a vízszintes elmozdulása:
-$$|\Delta x| < 2.5 \cdot \text{frame\_stride} \quad [\text{px}]$$
+$$|\Delta x| < 2.5 \cdot \text{frame-stride} \quad [\text{px}]$$
 
 | Oszlopnév | Jelentés |
 |---|---|
@@ -57,7 +57,7 @@ $$|\Delta x| < 2.5 \cdot \text{frame\_stride} \quad [\text{px}]$$
 ## 4. Kinematikai és bizonytalansági mutatók
 
 A kinematikai számítások előtt a nyers $(x_i, y_i)$ trajektóriát egy **5 pontos Gauss-kernellel** ($w = [0.06, 0.24, 0.40, 0.24, 0.06]$) simítja a rendszer. Ebből számolja a lépésenkénti sebességet:
-$$v_i = \frac{\sqrt{(\tilde{x}_i - \tilde{x}_{i-1})^2 + (\tilde{y}_i - \tilde{y}_{i-1})^2}}{\Delta t_i \cdot \text{px\_per\_cm}} \quad [\text{cm/s}]$$
+$$v_i = \frac{\sqrt{(\tilde{x}_i - \tilde{x}_{i-1})^2 + (\tilde{y}_i - \tilde{y}_{i-1})^2}}{\Delta t_i \cdot \text{px/cm}} \quad [\text{cm/s}]$$
 majd a sebességgörbén még egy **3 pontos simítást** ($[0.25, 0.50, 0.25]$) végez ($\tilde{v}_k$).
 
 ### `Sebesseg_Ingadozas_CV` (Variációs együttható, dimenziótlan)
@@ -79,7 +79,7 @@ Minél nagyobb, annál erősebb a függőleges billegés/imbolygás lépés köz
 
 ### `Bizonytalansagi_Index_Pct` (0–99.5%)
 Összetett, súlyozott mutató, amely a sebesség-ingadozást, megtorpanásokat, megállásokat, orr-lenézéseket, imbolygást, jerk-öt és lábhibákat egyetlen százalékos értékbe sűríti:
-$$U_{\text{raw}} = 14.0 \cdot \min(1.5, \text{CV}) + 3.5 \cdot N_{\text{mikro}} + 8.0 \cdot N_{\text{megállás}} + 2.5 \cdot N_{\text{orr}} + 2.0 \cdot \max(0, \text{Imbolygás} - 1.2) + 0.45 \cdot \text{Jerk}_{\text{score}} + 12.0 \cdot N_{\text{enyhe\_csúszás}} + 22.0 \cdot N_{\text{mély\_leesés}}$$
+$$U_{\text{raw}} = 14.0 \cdot \min(1.5, \text{CV}) + 3.5 \cdot N_{\text{mikro}} + 8.0 \cdot N_{\text{megállás}} + 2.5 \cdot N_{\text{orr}} + 2.0 \cdot \max(0, \text{Imbolygás} - 1.2) + 0.45 \cdot \text{Jerk}_{\text{score}} + 12.0 \cdot N_{\text{enyhe}} + 22.0 \cdot N_{\text{mély}}$$
 $$\text{Bizonytalanság (\%)} = \text{clip}\!\left(100 \cdot \tanh\!\left(\frac{U_{\text{raw}}}{85.0}\right),\; 0,\; 99.5\right)$$
 A $\tanh$ függvény miatt a kisebb hibák közel lineárisan növelik az indexet, míg sok hiba esetén $99.5\%$-hoz tart aszimptotikusan.
 
@@ -91,7 +91,7 @@ A $\tanh$ függvény miatt a kisebb hibák közel lineárisan növelik az indexe
 |---|---|
 | `Skala_px_per_cm` | A kalibrált átszámítási tényező ($\text{px/cm}$). |
 | `Megtett_Ut_px` | A simított 2D trajektória teljes ívhossza pixelben: $L_{\text{px}} = \sum_{i=1}^{n-1} \sqrt{(\tilde{x}_i - \tilde{x}_{i-1})^2 + (\tilde{y}_i - \tilde{y}_{i-1})^2}$. |
-| `Megtett_Ut_cm` | A megtett út centiméterben: $L_{\text{cm}} = L_{\text{px}} / \text{Skala\_px\_per\_cm}$. |
+| `Megtett_Ut_cm` | A megtett út centiméterben: $L_{\text{cm}} = L_{\text{px}} /$ `Skala_px_per_cm`. |
 | `Atlagsebesseg_px_mp` | Átlagsebesség ($\text{px/s}$): $L_{\text{px}} / T_{\text{teljes}}$. |
 | `Atlagsebesseg_cm_mp` | Átlagsebesség ($\text{cm/s}$): $L_{\text{cm}} / T_{\text{teljes}}$. |
 | `Max_Sebesseg_px_mp` | A lépésenkénti sebességek maximuma ($\text{px/s}$). |
@@ -101,7 +101,7 @@ A $\tanh$ függvény miatt a kisebb hibák közel lineárisan növelik az indexe
 
 ## 6. Zónabontás (Start / Közép / Cél)
 
-A start- és célkapu közötti távolságot a program **3 egyenlő szélességű harmadra** osztja ($\text{zone\_width} = (x_{\text{right\_gate}} - x_{\text{left\_gate}}) / 3$):
+A start- és célkapu közötti távolságot a program **3 egyenlő szélességű harmadra** osztja ($w_{\text{zóna}} = (x_{\text{jobb}} - x_{\text{bal}}) / 3$):
 
 | Zóna | Oszlopok | Jelentés |
 |---|---|---|
