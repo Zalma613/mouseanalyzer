@@ -374,6 +374,36 @@ class TestAutoAdaptiveLadderEngine(unittest.TestCase):
         self.assertIn("roi_bg", res)
         self.assertEqual(cap.pos, 0, "auto_calibrate_from_video must rewind VideoCapture to frame 0")
 
+    def test_auto_calibrate_uses_red_gate_markers(self):
+        engine = mt.AutoAdaptiveLadderEngine(lambda _: None)
+        frame = np.full((480, 1280, 3), 215, dtype=np.uint8)
+        frame[300:310, 20:1260] = 60                     # ladder
+        frame[120:300, 70:73] = (60, 60, 200)            # left red gate line (BGR)
+        frame[160:300, 1200:1203] = (60, 60, 200)        # right red gate line
+
+        class _FakeCap:
+            def get(self, prop):
+                return 120 if prop == mt.cv2.CAP_PROP_FRAME_COUNT else 30.0
+
+            def set(self, prop, val):
+                pass
+
+            def read(self):
+                return True, frame.copy()
+
+        res = engine.auto_calibrate_from_video(_FakeCap(), num_bg_samples=8)
+        self.assertTrue(abs(res["left_gate_x"] - 71) <= 2, res["left_gate_x"])
+        self.assertTrue(abs(res["right_gate_x"] - 1201) <= 2, res["right_gate_x"])
+        self.assertIn("RED", res["gate_source"])
+        self.assertLessEqual(res["rx"], res["left_gate_x"] - 10)
+        self.assertGreaterEqual(res["rx"] + res["rw"], res["right_gate_x"] + 10)
+
+        # Without red markers: fall back to default 10% / 86% gates
+        frame[:, :, 2] = frame[:, :, 1]
+        res2 = engine.auto_calibrate_from_video(_FakeCap(), num_bg_samples=8)
+        self.assertNotIn("RED markers (", res2["gate_source"])
+        self.assertEqual(res2["left_gate_x"], int(res2["rx"] + res2["rw"] * 0.10))
+
 
 class TestUltralyticsOfflineAndTrainerHardening(unittest.TestCase):
     """Tests HTTP 416 Arial.ttf guard, offline YOLO settings, check_font monkeypatch,

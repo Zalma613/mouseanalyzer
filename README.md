@@ -86,7 +86,19 @@ ruff check --select E9,F,B MouseTracker.py tests/test_mousetracker.py
 
 ---
 
-## 📦 Release Notes (`v1.4.9`)
+## 📦 Release Notes (`v1.4.10`)
+
+* **Automatic Red Gate Marker Detection & Crossing Validation:**
+  * Added `AutoAdaptiveLadderEngine.red_gate_column_profile` and `aggregate_red_gate_hits` to automatically detect vertical red gate markers at both ends of the ladder during auto-calibration (falling back to default `10%`/`86%` gates when not found).
+  * Added `valid_crossing` span/trajectory validation and a 4-second inactivity reset in `PerVideoIDTrackerApp` to ignore false or aborted gate triggers.
+* **Anatomical Classification, Thread Safety & Subject ID Naming:**
+  * Refined deep pink hindlimb detection (`is_deep_pink_hindlimb`, `tip_skin_score`) to prevent misclassifying hindlimb slips as tail/shadow events.
+  * Switched `_skin_chromaticity_numba_core` from `parallel=True`/`prange` to `nogil=True` for safe multi-threaded batch execution.
+  * Improved `_append_video_list` to preserve clean filename stems as Subject IDs (while stripping generic camera prefixes such as `IMG_`, `MOV_`, `VID_`).
+* **Headless Batch Automation & Audit Tools:**
+  * Added `scripts/batch_analyze.py`, `scripts/detect_red_gates.py`, `scripts/verify_exports.py`, `scripts/make_audit_sheets.py`, and `docs/AUTOMATA_FUTTATAS.md` for reproducible GUI-free batch runs.
+
+### Previous Release (`v1.4.9`)
 
 * **Per-Video Interactive Calibration (`var_per_video_calib`):**
   * Added an optional **"Ask for per-video calibration settings (gates, ROI, thresholds)"** (`chk_per_video_calib`) setting in the main control dock and Advanced Settings dialog (persisted in JSON calibration profiles).

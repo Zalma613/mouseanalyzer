@@ -1150,10 +1150,10 @@ def encode_frame_compressed(img, quality=94):
     return buf if ok else None
 
 
-@njit(fastmath=True, parallel=True)
+@njit(fastmath=True, nogil=True)
 def _skin_chromaticity_numba_core(crop_bgr, lab, amb_rg, amb_rb, amb_a, out):
     h, w = crop_bgr.shape[0], crop_bgr.shape[1]
-    for y in prange(h):
+    for y in range(h):
         for x in range(w):
             b = float(crop_bgr[y, x, 0])
             g = float(crop_bgr[y, x, 1])
@@ -2455,8 +2455,57 @@ class ParallelYoloOpenCVEngine:
 # ZERO-CALIBRATION & LIGHTWEIGHT ELASTIC LADDER TRACKING ENGINE
 # ==============================================================================
 class AutoAdaptiveLadderEngine:
+    # Red gate marker detection (vertical red lines drawn on paper strips at both ladder ends)
+    RED_GATE_MIN_REDNESS = 12          # min R - max(G, B) for a pixel to count as "red"
+    RED_GATE_MIN_COL_SCORE = 250.0     # min smoothed column redness sum for a per-frame hit
+    RED_GATE_SIDE_FRAC = 0.20          # search band width at each image edge (fraction of width)
+    RED_GATE_MIN_HIT_RATIO = 0.35      # min fraction of sampled frames with a valid hit per side
+
     def __init__(self, log_callback=print):
         self.log = log_callback
+        self.use_red_gate_markers = True
+
+    @classmethod
+    def red_gate_column_profile(cls, frame_bgr):
+        """Per-frame red-dominance column profile (R - max(G, B)) in the band where gate markers sit.
+
+        Returns (left_x, left_score, right_x, right_score) for the strongest red column in the left and
+        right edge bands, or None if the frame is not a 3-channel colour image.
+        """
+        if frame_bgr is None or frame_bgr.ndim != 3 or frame_bgr.shape[2] < 3:
+            return None
+        h, w = frame_bgr.shape[:2]
+        y1, y2 = int(h * 0.15), int(h * 0.75)
+        band = frame_bgr[y1:y2, :, :3].astype(np.int16)
+        redness = band[:, :, 2] - np.maximum(band[:, :, 1], band[:, :, 0])
+        redness[redness < cls.RED_GATE_MIN_REDNESS] = 0
+        col = np.convolve(redness.sum(axis=0).astype(np.float32), np.ones(5, np.float32) / 5.0, mode="same")
+        sw = max(8, int(w * cls.RED_GATE_SIDE_FRAC))
+        lx = int(np.argmax(col[:sw]))
+        rx = int(w - sw + np.argmax(col[w - sw:]))
+        return lx, float(col[lx]), rx, float(col[rx])
+
+    @classmethod
+    def aggregate_red_gate_hits(cls, profiles):
+        """Robust (median) gate x positions from per-frame profiles.
+
+        Returns dict with left_x/right_x (None if not reliably found), hit counts and spread (px).
+        """
+        profiles = [p for p in profiles if p is not None]
+        n = len(profiles)
+        res = {"left_x": None, "right_x": None, "n_frames": n,
+               "left_hits": 0, "right_hits": 0, "left_spread": None, "right_spread": None}
+        if n == 0:
+            return res
+        for side, xi, si in (("left", 0, 1), ("right", 2, 3)):
+            xs = np.array([p[xi] for p in profiles if p[si] >= cls.RED_GATE_MIN_COL_SCORE], dtype=np.float32)
+            res[f"{side}_hits"] = int(len(xs))
+            if len(xs) >= max(2, int(np.ceil(n * cls.RED_GATE_MIN_HIT_RATIO))):
+                med = float(np.median(xs))
+                inl = xs[np.abs(xs - med) <= 25]
+                res[f"{side}_x"] = int(round(float(np.median(inl))))
+                res[f"{side}_spread"] = int(round(float(inl.max() - inl.min()))) if len(inl) else 0
+        return res
 
     @staticmethod
     def _ensure_gray_2d(img):
@@ -2511,18 +2560,24 @@ class AutoAdaptiveLadderEngine:
 
         frames_gray = []
         sample_indices = []
+        red_profiles = []
+        use_red = bool(getattr(self, "use_red_gate_markers", False))
         if total_frames > 6:
             indices = np.linspace(0, max(1, total_frames - 2), sample_count, dtype=int)
             for idx in indices:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
                 ret, frm = cap.read()
                 if ret and frm is not None:
+                    if use_red:
+                        red_profiles.append(self.red_gate_column_profile(frm))
                     frames_gray.append(self._ensure_gray_2d(frm))
                     sample_indices.append(int(idx))
         else:
             for idx in range(sample_count):
                 ret, frm = cap.read()
                 if ret and frm is not None:
+                    if use_red:
+                        red_profiles.append(self.red_gate_column_profile(frm))
                     frames_gray.append(self._ensure_gray_2d(frm))
                     sample_indices.append(idx)
 
@@ -2571,7 +2626,21 @@ class AutoAdaptiveLadderEngine:
 
         left_gate_x = int(rx + rw * 0.10)
         right_gate_x = int(rx + rw * 0.86)
-
+        gate_source = "default 10%/86%"
+        red_info = self.aggregate_red_gate_hits(red_profiles) if use_red else None
+        if red_info and red_info["left_x"] is not None and red_info["right_x"] is not None \
+                and red_info["right_x"] - red_info["left_x"] >= fw * 0.4:
+            left_gate_x, right_gate_x = int(red_info["left_x"]), int(red_info["right_x"])
+            # Make sure the ROI contains both gates with a margin (worker clamps gates to ROI +/- 10 px)
+            new_rx = max(0, min(rx, left_gate_x - 40))
+            new_end = min(fw, max(rx + rw, right_gate_x + 40))
+            rx, rw = new_rx, max(120, new_end - new_rx)
+            gate_source = (f"RED markers (hits L {red_info['left_hits']}/{red_info['n_frames']}, "
+                           f"R {red_info['right_hits']}/{red_info['n_frames']}, "
+                           f"spread L {red_info['left_spread']}px R {red_info['right_spread']}px)")
+        elif red_info:
+            gate_source = (f"default 10%/86% - RED markers NOT found (hits L {red_info['left_hits']}, "
+                           f"R {red_info['right_hits']} / {red_info['n_frames']})")
         roi_bg = clean_bg_full[ry:ry + rh, rx:rx + rw]
         rung_y_local = max(14, min(rh - 14, ladder_y_center - ry))
         auto_params = self.compute_auto_thresholds(
@@ -2581,7 +2650,7 @@ class AutoAdaptiveLadderEngine:
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
         self.log(
-            f"🤖 [Auto-Calib] ROI=({rx},{ry},{rw}x{rh}) | Gates=({left_gate_x}->{right_gate_x}) | "
+            f"🤖 [Auto-Calib] ROI=({rx},{ry},{rw}x{rh}) | Gates=({left_gate_x}->{right_gate_x}) [{gate_source}] | "
             f"BestFrame=#{auto_params['best_preview_frame']} | "
             f"Brightness={auto_params['dark_thresh']}, Diff={auto_params['diff_thresh']}, "
             f"RungMask={auto_params['ladder_thresh']}, FaultLine={auto_params['fault_ratio']}%"
@@ -2590,6 +2659,7 @@ class AutoAdaptiveLadderEngine:
         return {
             "rx": rx, "ry": ry, "rw": rw, "rh": rh,
             "left_gate_x": left_gate_x, "right_gate_x": right_gate_x,
+            "gate_source": gate_source, "red_gate_info": red_info,
             "calib_dark_thresh": auto_params["dark_thresh"],
             "calib_diff_thresh": auto_params["diff_thresh"],
             "calib_ladder_thresh": auto_params["ladder_thresh"],
@@ -3124,7 +3194,10 @@ class DLCAddonManager:
                     return "ORR (Exploráció)", "NOSE"
 
             # 2. Tail check (posterior to tail base)
-            if tail_base is not None:
+            is_deep_pink_hindlimb = (
+                dip_depth >= 18.0 and (skin_score >= 10.5 or aspect_ratio <= 0.85)
+            )
+            if tail_base is not None and not is_deep_pink_hindlimb:
                 is_behind_tail = (tail_base[0] - dip_x) * move_dir >= -6
                 if is_behind_tail and abs(dip_x - tail_base[0]) <= 28 and rel_pos_norm <= 0.22:
                     return "FAROK (Billenés)", "HIND_TAIL"
@@ -3180,7 +3253,12 @@ class DLCAddonManager:
             return "MELLSŐ LÁB (Lábhiba)", "PAW"
 
         # 2. Posterior Tail / Rump Zone
-        if rel_pos_norm < 0.18 or (rel_pos_norm < 0.24 and aspect_ratio > 1.6 and dip_depth < 14.0):
+        is_deep_pink_hindlimb = (
+            dip_depth >= 18.0 and (skin_score >= 10.5 or aspect_ratio <= 0.85)
+        )
+        if not is_deep_pink_hindlimb and (
+            rel_pos_norm < 0.18 or (rel_pos_norm < 0.24 and aspect_ratio > 1.6 and dip_depth < 14.0)
+        ):
             return "FAROK (Billenés)", "HIND_TAIL"
 
         # 3. Hindlimb vs. Forelimb Foot-Fault Zone
@@ -6292,12 +6370,27 @@ class PerVideoIDTrackerApp:
 
     def _append_video_list(self, files):
         existing_paths = {item["path"] for item in self.video_data}
+        existing_ids = {item["id"] for item in self.video_data}
+        cam_prefixes = ("IMG", "MVI", "DSC", "VID", "MOV", "VIDEO", "CLIP", "PXL", "GOPR", "DJI")
         for fpath in files:
             if fpath in existing_paths:
                 continue
             fname = os.path.basename(fpath)
-            digits = "".join(filter(str.isdigit, os.path.splitext(fname)[0]))
-            suggested_id = digits[-3:] if digits else str(len(self.video_data) + 1)
+            stem = os.path.splitext(fname)[0].strip()
+            clean_stem = "".join(c if (c.isalnum() or c in ("-", "_")) else "_" for c in stem).strip("_")
+            upper_stem = clean_stem.upper()
+            is_generic_cam = any(
+                upper_stem.startswith(p + "_") or upper_stem.startswith(p + "-") or (upper_stem.startswith(p) and upper_stem[len(p):].isdigit())
+                for p in cam_prefixes
+            )
+            digits = "".join(filter(str.isdigit, stem))
+            if clean_stem and not is_generic_cam and len(clean_stem) <= 24:
+                suggested_id = clean_stem
+            else:
+                suggested_id = digits[-3:] if digits else (clean_stem or str(len(self.video_data) + 1))
+            if suggested_id in existing_ids and clean_stem and clean_stem not in existing_ids:
+                suggested_id = clean_stem
+            existing_ids.add(suggested_id)
             uid = f"vid_{len(self.video_data)}_{abs(hash(fpath)) % 100000}"
             self.video_data.append({"uid": uid, "path": fpath, "name": fname, "id": suggested_id})
             self.tree.insert("", "end", iid=uid, values=(fname, suggested_id, self.tr("status_waiting"), fpath))
@@ -7757,10 +7850,19 @@ class PerVideoIDTrackerApp:
             dip_y_local = int(ys[max_idx])
 
             skin_score = 0.0
+            tip_skin_score = 0.0
+            ty1_tip = max(sy, dip_y_local - 5)
+            ty2_tip = min(mh, dip_y_local + 3)
+            tx1_tip = max(0, dip_x_local - 4)
+            tx2_tip = min(mw, dip_x_local + 5)
             if skin_map is not None:
                 patch_skin = skin_map[sy:min(mh, sy + sh), sx:min(mw, sx + sw)]
                 if patch_skin.size > 0:
                     skin_score = float(np.percentile(patch_skin, 80))
+                tip_skin_patch = skin_map[ty1_tip:ty2_tip, tx1_tip:tx2_tip]
+                if tip_skin_patch.size > 0:
+                    tip_skin_score = float(np.percentile(tip_skin_patch, 80))
+                    skin_score = 0.65 * tip_skin_score + 0.35 * skin_score
 
             if crop_g is not None:
                 sub_mask_sc = below_zone[sy:min(mh, sy + sh), sx:min(mw, sx + sw)] > 0
@@ -7773,20 +7875,49 @@ class PerVideoIDTrackerApp:
                     if depth_val <= 14 and (p10_g > 78.0 or p50_g > 120.0):
                         continue
 
-                if base_gray is not None and depth_val <= 16 and skin_score < 12.5:
-                    py1, py2 = max(8, sy - 2), min(mh - 8, sy + sh + 2)
-                    px1, px2 = max(0, sx - 3), min(mw, sx + sw + 3)
-                    if (py2 - py1) >= 4 and (px2 - px1) >= 4:
-                        cur_p = crop_g[py1:py2, px1:px2].astype(np.float32)
-                        best_rung_mad = 999.0
-                        for dy_test in range(-8, 3):
-                            by1, by2 = py1 + dy_test, py2 + dy_test
+                # Verify that the actual dip tip is not empty bright background
+                tip_g_patch = ref_g_img[ty1_tip:ty2_tip, tx1_tip:tx2_tip]
+                if tip_g_patch.size > 0 and tip_skin_score < 11.5:
+                    if float(np.percentile(tip_g_patch, 25)) > 142.0:
+                        continue
+
+                if base_gray is not None:
+                    if depth_val <= 16 and skin_score < 12.5:
+                        py1, py2 = max(8, sy - 2), min(mh - 8, sy + sh + 2)
+                        px1, px2 = max(0, sx - 3), min(mw, sx + sw + 3)
+                        if (py2 - py1) >= 4 and (px2 - px1) >= 4:
+                            cur_p = crop_g[py1:py2, px1:px2].astype(np.float32)
+                            best_rung_mad = 999.0
+                            for dy_test in range(-8, 3):
+                                by1, by2 = py1 + dy_test, py2 + dy_test
+                                if 0 <= by1 and by2 <= mh:
+                                    bg_p = base_gray[by1:by2, px1:px2].astype(np.float32)
+                                    mad = float(np.mean(np.abs(cur_p - bg_p)))
+                                    if mad < best_rung_mad:
+                                        best_rung_mad = mad
+                            if best_rung_mad < 20.0:
+                                continue
+
+                    # Check the lower tip region specifically so upper body pixels above the rung
+                    # or hallucinated AI keypoints in static background cannot mask a static tip
+                    tpy1 = max(8, max(sy, dip_y_local - 6))
+                    tpy2 = min(mh - 8, dip_y_local + 3)
+                    tpx1 = max(0, dip_x_local - 5)
+                    tpx2 = min(mw, dip_x_local + 6)
+                    if (tpy2 - tpy1) >= 4 and (tpx2 - tpx1) >= 4:
+                        cur_tip = crop_g[tpy1:tpy2, tpx1:tpx2].astype(np.float32)
+                        best_tip_mad = 999.0
+                        for dy_test in range(-14, 5):
+                            by1, by2 = tpy1 + dy_test, tpy2 + dy_test
                             if 0 <= by1 and by2 <= mh:
-                                bg_p = base_gray[by1:by2, px1:px2].astype(np.float32)
-                                mad = float(np.mean(np.abs(cur_p - bg_p)))
-                                if mad < best_rung_mad:
-                                    best_rung_mad = mad
-                        if best_rung_mad < 20.0:
+                                for dx_test in (-3, 0, 3):
+                                    bx1, bx2 = tpx1 + dx_test, tpx2 + dx_test
+                                    if 0 <= bx1 and bx2 <= mw:
+                                        bg_tip = base_gray[by1:by2, bx1:bx2].astype(np.float32)
+                                        mad_t = float(np.mean(np.abs(cur_tip - bg_tip)))
+                                        if mad_t < best_tip_mad:
+                                            best_tip_mad = mad_t
+                        if best_tip_mad < 18.5 or (best_tip_mad < 24.0 and tip_skin_score < 12.0 and depth_val <= 18):
                             continue
 
             if gray_eff is not None:
@@ -8752,8 +8883,10 @@ class PerVideoIDTrackerApp:
                         ref_bg_gate = elastic_tracker.cached_warped_bg if elastic_tracker is not None else base_gray
                         ref_inv_gate = elastic_tracker.cached_warped_inv_ladder if elastic_tracker is not None else inv_ladder_mask
 
+                        start_gate_bonus = 110 if (run_count == 0 and current_sec <= 2.5 and not video_runs_list) else 0
+                        eff_left_max_loc = min(v_rw, left_gate_max_loc + start_gate_bonus)
                         left_has_motion = self._quick_check_start_gate(
-                            crop, ref_bg_gate, ref_inv_gate, left_gate_min_loc, left_gate_max_loc, dark_t, diff_t
+                            crop, ref_bg_gate, ref_inv_gate, left_gate_min_loc, eff_left_max_loc, dark_t, diff_t
                         )
                         right_has_motion = False
                         if bidirectional and not lock_lr:
@@ -8781,6 +8914,14 @@ class PerVideoIDTrackerApp:
                         active_base_smooth = base_smooth_static
                         active_fault_scalar = fault_y_local
 
+                    # Global experimenter occlusion filter (rejects frames where human torso/arms block the camera)
+                    torso_top_chk = max(12, min(v_rh, int(active_fault_scalar) - 6))
+                    upper_diff_chk = cv2.subtract(active_base_gray[:torso_top_chk, :], crop_gray[:torso_top_chk, :])
+                    upper_fg_pixels = int(np.count_nonzero(
+                        (upper_diff_chk > max(24, diff_t)) & (crop_gray[:torso_top_chk, :] < min(145, dark_t + 15))
+                    ))
+                    human_occluded = upper_fg_pixels > max(58000, int(v_rw * torso_top_chk * 0.18))
+
                     # Stationary & Kalman-velocity-predicted rescue bbox (only during active run)
                     previous_bbox_local = last_bbox_local if state.startswith("RUNNING_") else None
                     if (
@@ -8800,24 +8941,21 @@ class PerVideoIDTrackerApp:
                     active_static_blemish = static_blemish_base if active_base_gray is base_gray else None
 
                     ai_max_age_frames = max(12, frame_stride * 12)
-                    mouse_detected, final_mouse_mask, bbox, skin_idx_map = self._detect_mouse_on_crop(
-                        crop, active_base_gray, active_inv_ladder, v_rw, v_rh, dark_t, diff_t,
-                        fault_y_local=active_fault_target, stream_id=uid, frame_idx=frame_idx,
-                        ai_max_age=ai_max_age_frames, previous_bbox=previous_bbox_local,
-                        base_smooth_cached=active_base_smooth, return_skin=True, use_yolo=use_yolo_fusion,
-                        gray_raw_cached=crop_gray, static_blemish_cached=active_static_blemish
-                    )
+                    if human_occluded:
+                        mouse_detected, final_mouse_mask, bbox, skin_idx_map = False, None, None, None
+                    else:
+                        mouse_detected, final_mouse_mask, bbox, skin_idx_map = self._detect_mouse_on_crop(
+                            crop, active_base_gray, active_inv_ladder, v_rw, v_rh, dark_t, diff_t,
+                            fault_y_local=active_fault_target, stream_id=uid, frame_idx=frame_idx,
+                            ai_max_age=ai_max_age_frames, previous_bbox=previous_bbox_local,
+                            base_smooth_cached=active_base_smooth, return_skin=True, use_yolo=use_yolo_fusion,
+                            gray_raw_cached=crop_gray, static_blemish_cached=active_static_blemish
+                        )
 
                     mask_area = cv2.countNonZero(final_mouse_mask) if (mouse_detected and final_mouse_mask is not None) else 0
+                    if bbox is not None and (mask_area > 54000 or bbox[2] > max(640, int(v_rw * 0.45))):
+                        mouse_detected, final_mouse_mask, bbox, mask_area = False, None, None, 0
                     eff_kalman_dt = frame_stride * max(1, bbox_miss_count + 1)
-
-                    if mouse_detected and mask_area >= 1200:
-                        last_bbox_local = bbox
-                        bbox_miss_count = 0
-                    else:
-                        bbox_miss_count += 1
-                        if bbox_miss_count > max(4, frame_stride * 4):
-                            last_bbox_local = None
 
                     mouse_x_global = None
                     mouse_y_center_global = None
@@ -8843,13 +8981,32 @@ class PerVideoIDTrackerApp:
                             raw_gx = v_rx + x_c + (w_c // 2)
                             raw_gy = v_ry + y_c + (h_c // 2)
 
-                        if kalman is not None and state.startswith("RUNNING_"):
-                            mouse_x_global, mouse_y_center_global = kalman.update(raw_gx, raw_gy, dt_frames=eff_kalman_dt)
+                        # Single-frame teleportation jump guard during active runs
+                        dt_jump = max(0.016, current_sec - last_seen_time)
+                        if (
+                            state.startswith("RUNNING_")
+                            and prev_mouse_x is not None
+                            and dt_jump < 1.5
+                            and abs(raw_gx - prev_mouse_x) > max(360, int(750 * dt_jump))
+                        ):
+                            mouse_detected = False
+                            mask_area = 0
+                            bbox_miss_count += 1
+                            if bbox_miss_count > max(4, frame_stride * 4):
+                                last_bbox_local = None
                         else:
-                            mouse_x_global, mouse_y_center_global = raw_gx, raw_gy
-                        mouse_y_top_global = v_ry + y_c
-
-                        session_trajectory.append((mouse_x_global, mouse_y_center_global, current_sec))
+                            last_bbox_local = bbox
+                            bbox_miss_count = 0
+                            if kalman is not None and state.startswith("RUNNING_"):
+                                mouse_x_global, mouse_y_center_global = kalman.update(raw_gx, raw_gy, dt_frames=eff_kalman_dt)
+                            else:
+                                mouse_x_global, mouse_y_center_global = raw_gx, raw_gy
+                            mouse_y_top_global = v_ry + y_c
+                            session_trajectory.append((mouse_x_global, mouse_y_center_global, current_sec))
+                    else:
+                        bbox_miss_count += 1
+                        if bbox_miss_count > max(4, frame_stride * 4):
+                            last_bbox_local = None
 
                     # ──────────────────────────────────────────────────────────
                     # RUN LIFECYCLE (SUPPORTS BOTH L->R AND BIDIRECTIONAL R->L)
@@ -8857,7 +9014,8 @@ class PerVideoIDTrackerApp:
                     if state.startswith("WAIT_FOR_RUN_"):
                         target_run_num = int(state.split("_")[-1])
                         if (current_sec - last_run_end_sec >= 1.5) and mouse_detected and mouse_x_global is not None and mask_area >= 2000:
-                            at_left_start = (left_gate_x - 120 <= mouse_x_global <= left_gate_x + 220 + stride_pad)
+                            start_bonus_px = 110 if (target_run_num == 1 and current_sec <= 2.5 and not video_runs_list) else 0
+                            at_left_start = (left_gate_x - 120 <= mouse_x_global <= left_gate_x + 220 + stride_pad + start_bonus_px)
                             at_right_start = (
                                 bidirectional and not lock_lr
                                 and (right_gate_x - 220 - stride_pad <= mouse_x_global <= right_gate_x + 120)
@@ -9028,10 +9186,14 @@ class PerVideoIDTrackerApp:
                             # Célba érés ellenőrzése iránytól függően:
                             if run_direction >= 0:
                                 mouse_front_edge_x = v_rx + bbox[0] + bbox[2]
-                                reached_goal = (mouse_x_global >= right_gate_x - 45) or (mouse_front_edge_x >= right_gate_x + 10)
+                                reached_goal = (mouse_x_global >= right_gate_x - 45) or (
+                                    mouse_front_edge_x >= right_gate_x + 10 and mouse_x_global >= right_gate_x - 240
+                                )
                             else:
                                 mouse_front_edge_x = v_rx + bbox[0]
-                                reached_goal = (mouse_x_global <= left_gate_x + 45) or (mouse_front_edge_x <= left_gate_x - 10)
+                                reached_goal = (mouse_x_global <= left_gate_x + 45) or (
+                                    mouse_front_edge_x <= left_gate_x - 10 and mouse_x_global <= left_gate_x + 240
+                                )
 
                             if reached_goal:
                                 if in_freeze_event:
@@ -9045,7 +9207,16 @@ class PerVideoIDTrackerApp:
                                 end_time = current_sec
                                 transit_time = end_time - start_time
 
-                                if transit_time > 0.4:
+                                traj_xs_chk = [pt[0] for pt in trajectory]
+                                traj_span_x = (max(traj_xs_chk) - min(traj_xs_chk)) if traj_xs_chk else 0
+                                gate_span_x = max(80, right_gate_x - left_gate_x)
+                                valid_crossing = (
+                                    transit_time > 0.4
+                                    and len(trajectory) >= 4
+                                    and traj_span_x >= 0.40 * gate_span_x
+                                )
+
+                                if valid_crossing:
                                     np.minimum(master_roi_canvas, current_run_roi, out=master_roi_canvas)
 
                                     # --- GAUSS-SIMÍTOTT TRAJEKTÓRIA A KINEMATIKÁHOZ ÉS JERK-HÖZ ---
@@ -9161,13 +9332,30 @@ class PerVideoIDTrackerApp:
                                         f"Speed={avg_speed_cm_s:.1f} cm/s"
                                     )
 
-                                last_run_end_sec = current_sec
-                                if run_count >= target_runs:
-                                    set_state("SESSION_COMPLETED", current_sec, f"All {target_runs} protocol runs reached!")
-                                    break
+                                    last_run_end_sec = current_sec
+                                    if run_count >= target_runs:
+                                        set_state("SESSION_COMPLETED", current_sec, f"All {target_runs} protocol runs reached!")
+                                        break
+                                    else:
+                                        next_target = run_count + 1
+                                        set_state(f"WAIT_FOR_RUN_{next_target}", current_sec, f"Run #{run_count} completed. Waiting for Run #{next_target}{' (any gate)' if (bidirectional and not lock_lr) else ' at Left Gate'}...")
                                 else:
-                                    next_target = run_count + 1
-                                    set_state(f"WAIT_FOR_RUN_{next_target}", current_sec, f"Run #{run_count} completed. Waiting for Run #{next_target}{' (any gate)' if (bidirectional and not lock_lr) else ' at Left Gate'}...")
+                                    set_state(
+                                        f"WAIT_FOR_RUN_{run_count}",
+                                        current_sec,
+                                        f"Ignored false/aborted trigger ({transit_time:.2f}s, span={traj_span_x}px). Waiting for Run #{run_count}..."
+                                    )
+                        else:
+                            # If a false start occurred at the gate and no mouse is seen for > 4.0s without advancing onto the ladder, reset to WAIT_FOR_RUN_{run_count}
+                            if (current_sec - last_seen_time) > 4.0:
+                                traj_xs_chk = [pt[0] for pt in trajectory]
+                                traj_span_x = (max(traj_xs_chk) - min(traj_xs_chk)) if traj_xs_chk else 0
+                                if len(trajectory) < 12 or traj_span_x < 0.25 * max(80, right_gate_x - left_gate_x):
+                                    set_state(
+                                        f"WAIT_FOR_RUN_{run_count}",
+                                        current_sec,
+                                        f"Aborted start reset after {current_sec - last_seen_time:.1f}s inactivity. Waiting for Run #{run_count}..."
+                                    )
 
             finally:
                 reader.stop()
